@@ -221,5 +221,38 @@ def main():
     print(f"Summary JSON salvo em {summary_path}")
 
 
+# Função para processar dados de nuvem de pontos
+def process_point_cloud(data):
+    # ...
+    # Implementação do downsampling
+    downsampled_data = downsample(data)
+    # ...
+    return downsampled_data
+
+# Função para adicionar círculos de navegação
+def add_navigation_circles():
+    """Adiciona círculos de navegação à interface do usuário."""
+    # Implementação para adicionar círculos de navegação
+    print("Adicionando círculos de navegação...")
+    # Lógica para desenhar círculos
+
+# Função para melhorar a interface do usuário
+def enhance_ui():
+    # Exemplo de implementação simples
+    print("Melhorando a interface do usuário...")
+    # Adicionando eixos e grade
+    add_axes()
+    add_grid()
+    # ...
+
+
+def downsample(data, voxel_size=0.5):
+    """Aplica downsampling à nuvem de pontos usando voxel grid."""
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(data)
+    downsampled_pcd = pcd.voxel_down_sample(voxel_size)
+    return np.asarray(downsampled_pcd.points)
+
+
 if __name__ == '__main__':
     main()

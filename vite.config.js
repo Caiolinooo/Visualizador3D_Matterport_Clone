@@ -14,10 +14,20 @@ export default defineConfig({
     open: true,
     proxy: {
       '/api': {
-        target: 'http://localhost:5173',
+        target: 'http://localhost:3000',
         changeOrigin: true,
         secure: false,
       },
+      '/input_data': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/output': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+        secure: false,
+      }
     },
   },
 });

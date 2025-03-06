@@ -1,662 +1,1161 @@
-(function(){
+/*
+ * Visualizador 3D estilo Matterport para arquivos PTS e panorâmicas
+ * Implementação que combina:
+ * - Navegação entre cenas
+ * - Panorâmicas equiretangulares
+ * - Visualização de nuvem de pontos
+ * - Ferramentas de medição
+ * - Vista dollhouse e planta baixa
+ * - Anotações/tags nos ambientes
+ * - Tour automático
+ */
+
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+
+(function() {
+  // Variáveis globais
   let scene, camera, renderer, controls;
-  let currentPanorama, currentPointCloud;
+  let panoramaSphere, currentPointCloud;
   let measurementPoints = [];
+  let measurementLine, measurementPreview;
   let isMeasuring = false;
-  let axesHelper, gridHelper;
-  let initialLoad = true;
-
-  // Função para criar sprites de texto
-  function makeTextSprite(message) {
-    const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d');
-    context.font = "Bold 20px Arial";
-    const metrics = context.measureText(message);
-    const textWidth = metrics.width;
-    canvas.width = textWidth + 20;
-    canvas.height = 40;
-    context.fillStyle = "rgba(255,255,255,1.0)";
-    context.fillText(message, 10, 25);
-    const texture = new THREE.CanvasTexture(canvas);
-    const spriteMaterial = new THREE.SpriteMaterial({ map: texture });
-    const sprite = new THREE.Sprite(spriteMaterial);
-    sprite.scale.set(10, 5, 1.0);
-    return sprite;
-  }
-
-  // Inicialização do Three.js
-  function initViewer() {
-    scene = new THREE.Scene();
-    // Configurar o eixo Z como 'up'
-    scene.up = new THREE.Vector3(0, 0, 1);
-    scene.background = new THREE.Color(0x505050);
-    camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
-    camera.up = new THREE.Vector3(0, 0, 1);
-    renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(window.devicePixelRatio);
-    document.body.appendChild(renderer.domElement);
-
-    controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.minPolarAngle = THREE.Math.degToRad(20);
-    controls.maxPolarAngle = THREE.Math.degToRad(70);
-    controls.minAzimuthAngle = -Infinity;
-    controls.maxAzimuthAngle = Infinity;
-    // Não ajustamos a posição padrão aqui
+  let isTagMode = false;
+  let isFloorPlanVisible = false;
+  let isDollhouseMode = false;
+  let autoTourActive = false;
+  let autoTourInterval;
+  let tags = [];
+  let scenes = [];
+  let currentSceneIndex = 0;
+  let raycaster = new THREE.Raycaster();
+  let mouse = new THREE.Vector2();
+  let hoverState = { mesh: null };
+  
+  // Elementos DOM
+  const loadingOverlay = document.getElementById('loading-overlay');
+  const infoElement = document.getElementById('info');
+  const measureInfoElement = document.getElementById('measure-info');
+  const floorPlanElement = document.getElementById('floor-plan');
+  
+  // Inicialização
+  function init() {
+    setupScene();
+    setupCamera();
+    setupRenderer();
+    setupLights();
+    setupControls();
+    setupEventListeners();
+    setupUI();
     
-    // Luz ambiente
+    // Inicia o loop de renderização
+    animate();
+    
+    // Carrega as cenas disponíveis
+    loadScenes();
+  }
+  
+  // Configuração da cena Three.js
+  function setupScene() {
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x000000);
+    scene.fog = new THREE.FogExp2(0x000000, 0.002);
+  }
+  
+  // Configuração da câmera
+  function setupCamera() {
+    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 1, 5); // Ajuste a posição da câmera conforme necessário
+  }
+  
+  // Configuração do renderer
+  function setupRenderer() {
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+  }
+  
+  // Adiciona luzes à cena
+  function setupLights() {
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
     scene.add(ambientLight);
-
-    // Adicionar grid helper para orientação no plano XY (com Z como up)
-    gridHelper = new THREE.GridHelper(200, 50);
-    gridHelper.rotation.x = Math.PI / 2;
-    scene.add(gridHelper);
-
-    // Adicionar eixos cartesianos
-    axesHelper = new THREE.AxesHelper(10);
-    scene.add(axesHelper);
-
-    window.addEventListener('resize', onWindowResize);
-    renderer.domElement.addEventListener('click', handleMeasurementClick);
-    renderer.domElement.addEventListener('mousemove', onMeasurementMouseMove);
-
-    createSidebar();
-    createUIControls();
-    createMeasurementToggleControl();
-    animate();
-
-    // Execute a animação de entrada: inicia com uma vista 'doll house' e depois transita para a vista interativa
-    playEntryAnimation();
-
-    // Após a animação de entrada, carregar todas as cenas
-    setTimeout(() => {
-      loadAllScenes();
-    }, 3000);
+    
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+    directionalLight.position.set(1, 1, 1);
+    scene.add(directionalLight);
   }
-
-  function onWindowResize(){
+  
+  // Configuração dos controles OrbitControls
+  function setupControls() {
+    controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.screenSpacePanning = false;
+    controls.minDistance = 1;
+    controls.maxDistance = 50;
+    controls.maxPolarAngle = Math.PI;
+    controls.enablePan = true;
+    
+    // Não permite zoom com o scroll do mouse (apenas com pinch)
+    controls.enableZoom = true;
+    controls.zoomSpeed = 1.0;
+    
+    // Posição inicial
+    controls.target.set(0, 1.6, -1);
+    controls.update();
+  }
+  
+  // Configuração de event listeners
+  function setupEventListeners() {
+    window.addEventListener('resize', onWindowResize, false);
+    renderer.domElement.addEventListener('click', onDocumentClick, false);
+    renderer.domElement.addEventListener('mousemove', onDocumentMouseMove, false);
+    
+    // Se clicar no botão escape, sai do modo atual (medição, tags)
+    window.addEventListener('keydown', function(event) {
+      if (event.key === 'Escape') {
+        isMeasuring = false;
+        isTagMode = false;
+        updateUIState();
+      }
+    });
+  }
+  
+  // Configuração da interface
+  function setupUI() {
+    // Botões da interface
+    document.getElementById('btn-dollhouse').addEventListener('click', toggleDollhouseView);
+    document.getElementById('btn-floorplan').addEventListener('click', toggleFloorPlan);
+    document.getElementById('btn-measure').addEventListener('click', toggleMeasureMode);
+    document.getElementById('btn-tags').addEventListener('click', toggleTagMode);
+    document.getElementById('btn-tour').addEventListener('click', toggleAutoTour);
+    
+    // Atualizando estado inicial da UI
+    updateUIState();
+  }
+  
+  // Loop de animação
+  function animate() {
+    requestAnimationFrame(animate);
+    
+    controls.update();
+    
+    // Atualiza posição de qualquer elemento dependente da câmera (labels, etc)
+    updateLabelsPosition();
+    
+    renderer.render(scene, camera);
+  }
+  
+  // Ajuste ao redimensionar a janela
+  function onWindowResize() {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
   }
-
-  function animate(){
-    requestAnimationFrame(animate);
-    controls.update();
-    renderer.render(scene, camera);
-  }
-
-  // Cria a barra lateral para listar as cenas
-  function createSidebar(){
-    const sidebar = document.createElement('div');
-    sidebar.id = 'sidebar';
-    sidebar.style.position = 'absolute';
-    sidebar.style.top = '10px';
-    sidebar.style.left = '10px';
-    sidebar.style.width = '300px';
-    sidebar.style.maxHeight = '90vh';
-    sidebar.style.overflowY = 'auto';
-    sidebar.style.backgroundColor = 'rgba(0,0,0,0.7)';
-    sidebar.style.color = '#fff';
-    sidebar.style.padding = '10px';
-    sidebar.style.fontFamily = 'Arial, sans-serif';
-    sidebar.innerHTML = '<h2>Cenas Processadas</h2><p>Carregando...</p>';
-    document.body.appendChild(sidebar);
-  }
-
-  // Função para criar marcador e adicionar ao Three.js
-  function addMarker(sceneData) {
-    if(!sceneData.center) return; // se não houver centro, pula
-    const markerGeometry = new THREE.SphereGeometry(1, 12, 12);
-    const markerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-    const marker = new THREE.Mesh(markerGeometry, markerMaterial);
-    marker.position.set(sceneData.center[0], 1, sceneData.center[2]);
-    marker.userData = { info: {
-      name: sceneData.name,
-      center: sceneData.center,
-      links: sceneData.files
-    } };
-    scene.add(marker);
+  
+  /* 
+   * Carregamento e gerenciamento de cenas
+   */
+  
+  // Carrega a lista de cenas disponíveis a partir da API
+  function loadScenes() {
+    showLoading(true);
     
-    const sprite = makeTextSprite(sceneData.name);
-    sprite.position.set(sceneData.center[0], 3, sceneData.center[2]);
-    scene.add(sprite);
+    fetch('/api/matterport')
+      .then(response => {
+        if (!response.ok) throw new Error('Erro ao carregar cenas');
+        return response.json();
+      })
+      .then(data => {
+        scenes = data;
+        populateScenesMenu(scenes);
+        
+        if (scenes.length > 0) {
+          loadScene(scenes[0]);
+        } else {
+          showLoading(false);
+          showMessage('Nenhuma cena disponível');
+        }
+      })
+      .catch(error => {
+        console.error('Erro:', error);
+        showLoading(false);
+        showMessage('Erro ao carregar cenas: ' + error.message);
+      });
   }
-
-  // Busca cenas processadas a partir do endpoint /api/matterport
-  async function loadMatterportScenes() {
-    try {
-      console.log('Iniciando fetch de /api/matterport');
-      const response = await fetch('/api/matterport');
-      if (!response.ok) {
-        throw new Error('Erro na requisição: ' + response.status);
-      }
-      const scenes = await response.json();
-      console.log('Cenas recuperadas:', scenes);
-      populateSidebar(scenes);
-      if (scenes.length > 0) {
-        loadScene(scenes[0]);
-      } else {
-        console.log('Nenhuma cena processada, criando cena padrão');
-        const boxGeometry = new THREE.BoxGeometry();
-        const boxMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
-        const box = new THREE.Mesh(boxGeometry, boxMaterial);
-        box.position.set(0, 1, 0);
-        scene.add(box);
-      }
-    } catch (err) {
-      console.error('Erro em loadMatterportScenes:', err);
-      const sidebar = document.getElementById('sidebar');
-      if (sidebar) {
-        sidebar.innerText = 'Erro ao carregar cenas processadas';
-      }
-      console.log('Erro ocorrido. Criando cena padrão como fallback.');
-      const boxGeometry = new THREE.BoxGeometry();
-      const boxMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
-      const box = new THREE.Mesh(boxGeometry, boxMaterial);
-      box.position.set(0, 1, 0);
-      scene.add(box);
-    }
-  }
-
-  // Popula a sidebar com as cenas recebidas
-  function populateSidebar(scenes) {
-    const sidebar = document.getElementById('sidebar');
-    sidebar.innerHTML = '<h2>Cenas Processadas</h2>';
-    scenes.forEach(sceneData => {
-      const sceneDiv = document.createElement('div');
-      sceneDiv.className = 'scene-item';
-      sceneDiv.style.borderBottom = '1px solid #555';
-      sceneDiv.style.marginBottom = '5px';
-      sceneDiv.style.paddingBottom = '5px';
-      sceneDiv.style.cursor = 'pointer';
-      sceneDiv.innerHTML = `<h3>${sceneData.name}</h3>
-                          <p>Centro: ${sceneData.center ? sceneData.center.join(', ') : 'N/A'}</p>`;
-      sceneDiv.addEventListener('click', () => { flyToScene(sceneData); });
-      sidebar.appendChild(sceneDiv);
+  
+  // Popula o menu de cenas na sidebar
+  function populateScenesMenu(scenes) {
+    const scenesList = document.getElementById('scenes-list');
+    scenesList.innerHTML = '';
+    
+    scenes.forEach((scene, index) => {
+      const sceneElement = document.createElement('div');
+      sceneElement.className = 'scene-item';
+      sceneElement.innerHTML = `
+        <h3>${scene.name}</h3>
+        <p>Centro: ${scene.center ? scene.center.map(c => c.toFixed(2)).join(', ') : 'N/A'}</p>
+      `;
+      
+      sceneElement.addEventListener('click', () => {
+        currentSceneIndex = index;
+        loadScene(scene);
+      });
+      
+      scenesList.appendChild(sceneElement);
     });
   }
-
-  // Carrega uma cena: panorama e nuvem real
+  
+  // Carrega uma cena específica
   function loadScene(sceneData) {
+    showLoading(true);
+    
+    // Limpa cena atual
     clearScene();
-
-    if (!initialLoad) {
-      camera.position.set(0, 1.6, 3);
-      controls.target.set(0, 0, 0);
-      controls.update();
-    }
-
-    // Adiciona rótulo, se houver centro (opcional)
-    if (sceneData.center) {
-      const label = makeTextSprite(sceneData.name);
-      label.position.set(sceneData.center[0], sceneData.center[1] + 2, sceneData.center[2]);
-      scene.add(label);
-    }
-
-    // Carrega a panorâmica, se houver
+    
+    // Restaura configurações padrão
+    resetModes();
+    
+    // Informa qual cena está sendo carregada
+    showMessage(`Carregando cena: ${sceneData.name}`);
+    
+    // Carrega a panorâmica
     if (sceneData.files && sceneData.files.panorama) {
-      loadPanorama(sceneData.files.panorama);
+      loadPanorama(Array.isArray(sceneData.files.panorama) 
+        ? sceneData.files.panorama[0] 
+        : sceneData.files.panorama);
     }
-
-    // Carrega a nuvem, se houver
+    
+    // Carrega a nuvem de pontos
     if (sceneData.files && sceneData.files.cloud) {
-      loadPointCloud(sceneData.files.cloud, sceneData.center);
+      loadPointCloud(sceneData.files.cloud);
     }
-
-    initialLoad = false;
+    
+    // Carrega a planta baixa
+    if (sceneData.files && sceneData.files.floor_plan) {
+      loadFloorPlan(sceneData.files.floor_plan);
+    }
+    
+    // Adiciona pontos de navegação entre cenas
+    addNavigationPoints();
+    
+    // Posiciona a câmera na cena
+    positionCameraInScene(sceneData);
   }
-
-  // Remove objetos antigos (exceto os marcados com userData.keep)
-  function clearScene(){
-    for(let i = scene.children.length - 1; i >= 0; i--) {
+  
+  // Limpa a cena atual
+  function clearScene() {
+    // Remove todos os objetos da cena, exceto luzes
+    for (let i = scene.children.length - 1; i >= 0; i--) {
       const obj = scene.children[i];
-      if(obj.userData && obj.userData.keep) continue;
+      if (obj.type === 'AmbientLight' || obj.type === 'DirectionalLight') {
+        continue;
+      }
       scene.remove(obj);
     }
+    
+    // Limpa todas as variáveis de referência
+    panoramaSphere = null;
+    currentPointCloud = null;
+    measurementLine = null;
+    measurementPreview = null;
+    measurementPoints = [];
   }
-
-  // Carrega a panorâmica usando TextureLoader
-  function loadPanorama(panoramaURL) {
-    console.log('Carregando panorama: ' + panoramaURL);
-    const geometry = new THREE.SphereGeometry(50, 60, 40);
-    geometry.scale(-1, 1, 1);
-    new THREE.TextureLoader().load(panoramaURL, texture => {
-      console.log('Panorama carregado com sucesso');
-      const material = new THREE.MeshBasicMaterial({ map: texture });
-      const sphere = new THREE.Mesh(geometry, material);
-      sphere.userData.keep = true;
-      scene.add(sphere);
-      currentPanorama = sphere;
-    }, xhr => {
-      console.log((xhr.loaded / xhr.total * 100) + '% carregado');
-    }, error => {
-      console.error('Falha ao carregar panorama:', error);
+  
+  // Reinicia todos os modos
+  function resetModes() {
+    isMeasuring = false;
+    isTagMode = false;
+    isDollhouseMode = false;
+    isFloorPlanVisible = false;
+    stopAutoTour();
+    
+    // Atualiza UI
+    updateUIState();
+  }
+  
+  // Carrega uma panorâmica
+  function loadPanorama(panoramaUrl) {
+    if (!panoramaUrl) {
+      console.warn('URL de panorâmica não fornecida');
+      return;
+    }
+    
+    const textureLoader = new THREE.TextureLoader();
+    textureLoader.load(
+      panoramaUrl,
+      // Sucesso
+      function(texture) {
+        // Cria uma esfera para a panorâmica
+        const geometry = new THREE.SphereGeometry(90, 64, 32);
+        geometry.scale(-1, 1, 1); // Inverte a geometria para que a textura fique do lado interno
+        
+        const material = new THREE.MeshBasicMaterial({
+          map: texture,
+          side: THREE.BackSide // Renderiza o lado interno da esfera
+        });
+        
+        // Remove panorâmica anterior se existir
+        if (panoramaSphere) {
+          scene.remove(panoramaSphere);
+        }
+        
+        panoramaSphere = new THREE.Mesh(geometry, material);
+        panoramaSphere.name = 'panorama';
+        scene.add(panoramaSphere);
+        
+        showMessage('Panorâmica carregada');
+      },
+      // Progresso
+      function(xhr) {
+        const percent = Math.round((xhr.loaded / xhr.total) * 100);
+        showMessage(`Carregando panorâmica... ${percent}%`);
+      },
+      // Erro
+      function(error) {
+        console.error('Erro ao carregar panorâmica:', error);
+        showMessage('Erro ao carregar panorâmica');
+      }
+    );
+  }
+  
+  // Carrega nuvem de pontos (formato PLY)
+  function loadPointCloud(cloudUrl) {
+    if (!cloudUrl) {
+      console.warn('URL de nuvem de pontos não fornecida');
+      return;
+    }
+    
+    const plyLoader = new THREE.PLYLoader();
+    plyLoader.load(
+      cloudUrl,
+      // Sucesso
+      function(geometry) {
+        geometry.computeVertexNormals();
+        
+        // Cria material para os pontos
+        const material = new THREE.PointsMaterial({
+          color: 0xFFFFFF,
+          size: 0.05,
+          sizeAttenuation: true,
+          vertexColors: true,
+          transparent: true,
+          opacity: 0.7
+        });
+        
+        // Remove nuvem de pontos anterior se existir
+        if (currentPointCloud) {
+          scene.remove(currentPointCloud);
+        }
+        
+        // Cria a nuvem de pontos
+        currentPointCloud = new THREE.Points(geometry, material);
+        currentPointCloud.name = 'pointcloud';
+        scene.add(currentPointCloud);
+        
+        showMessage('Nuvem de pontos carregada');
+        showLoading(false);
+      },
+      // Progresso
+      function(xhr) {
+        const percent = Math.round((xhr.loaded / xhr.total) * 100);
+        showMessage(`Carregando nuvem de pontos... ${percent}%`);
+      },
+      // Erro
+      function(error) {
+        console.error('Erro ao carregar nuvem de pontos:', error);
+        showMessage('Erro ao carregar nuvem de pontos');
+        showLoading(false);
+      }
+    );
+  }
+  
+  // Carrega a planta baixa
+  function loadFloorPlan(floorPlanUrl) {
+    if (!floorPlanUrl) {
+      console.warn('URL de planta baixa não fornecida');
+      return;
+    }
+    
+    // Carrega a imagem da planta baixa e a armazena para exibição posterior
+    const floorPlanImg = new Image();
+    floorPlanImg.onload = function() {
+      floorPlanElement.innerHTML = '';
+      floorPlanElement.appendChild(floorPlanImg);
+      floorPlanImg.style.width = '100%';
+      floorPlanImg.style.height = '100%';
+      floorPlanImg.style.objectFit = 'contain';
+    };
+    
+    floorPlanImg.onerror = function() {
+      console.error('Erro ao carregar imagem da planta baixa');
+    };
+    
+    floorPlanImg.src = floorPlanUrl;
+  }
+  
+  // Adiciona pontos de navegação entre cenas
+  function addNavigationPoints() {
+    // Adiciona pontos de navegação para cada cena
+    scenes.forEach((sceneData, index) => {
+      if (index === currentSceneIndex || !sceneData.center) return;
+      
+      // Cria ponto de navegação
+      const navPointGeometry = new THREE.SphereGeometry(0.3, 16, 16);
+      const navPointMaterial = new THREE.MeshBasicMaterial({
+        color: 0x3498db,
+        transparent: true,
+        opacity: 0.8
+      });
+      
+      const navPoint = new THREE.Mesh(navPointGeometry, navPointMaterial);
+      
+      // Define posição baseada no centro da cena
+      const position = new THREE.Vector3(...sceneData.center);
+      navPoint.position.copy(position);
+      
+      // Metadados para identificação
+      navPoint.userData = {
+        type: 'navpoint',
+        targetScene: index,
+        name: sceneData.name
+      };
+      
+      // Adiciona à cena
+      scene.add(navPoint);
+      
+      // Adiciona textos flutuantes
+      addFloatingText(position, sceneData.name);
     });
   }
-
-  // Função para criar círculos de navegação com base na geometria da nuvem
-  function createNavigationCircles(geometry) {
-    if (!geometry.boundingBox) {
-      geometry.computeBoundingBox();
-    }
-    const bb = geometry.boundingBox;
-    const minX = bb.min.x;
-    const maxX = bb.max.x;
-    const minZ = bb.min.z;
-    const maxZ = bb.max.z;
-    const spacing = 5; // espaçamento entre os círculos
-    for (let x = minX; x < maxX; x += spacing) {
-      for (let z = minZ; z < maxZ; z += spacing) {
-        const circleGeometry = new THREE.CircleGeometry(2, 32);
-        const circleMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00, opacity: 0.5, transparent: true });
-        const circle = new THREE.Mesh(circleGeometry, circleMaterial);
-        circle.rotation.x = -Math.PI / 2; // deixar o círculo horizontal
-        // Posiciona o círculo no centro da célula, considerando que o piso está no nível mínimo da nuvem
-        circle.position.set(x + spacing / 2, bb.min.y + 0.1, z + spacing / 2);
-        circle.userData.nav = true; // marca este objeto como item de navegação
-        scene.add(circle);
-      }
-    }
+  
+  // Adiciona texto flutuante na cena
+  function addFloatingText(position, text) {
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    canvas.width = 256;
+    canvas.height = 128;
+    
+    // Configura texto
+    context.font = 'Bold 24px Arial';
+    context.fillStyle = 'white';
+    context.textAlign = 'center';
+    context.fillText(text, 128, 64);
+    
+    // Cria textura e sprite
+    const texture = new THREE.CanvasTexture(canvas);
+    const material = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true
+    });
+    
+    const sprite = new THREE.Sprite(material);
+    sprite.position.copy(position);
+    sprite.position.y += 0.5; // Posiciona um pouco acima do ponto
+    sprite.scale.set(2, 1, 1);
+    
+    sprite.userData = {
+      type: 'label'
+    };
+    
+    scene.add(sprite);
   }
-
-  // Função para animar a transição da câmera
-  function animateCameraTransition(newCamPos, newTarget, duration = 1000) {
-    let startTime = null;
-    const initialCamPos = camera.position.clone();
-    const initialTarget = controls.target.clone();
-
-    function animateStep(timestamp) {
-      if (!startTime) startTime = timestamp;
-      const elapsed = timestamp - startTime;
-      const t = Math.min(elapsed / duration, 1);
-      // Função de easing easeInOutQuad
-      const easeT = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
-      camera.position.lerpVectors(initialCamPos, newCamPos, easeT);
-      controls.target.lerpVectors(initialTarget, newTarget, easeT);
-      controls.update();
-      if (t < 1) {
-        requestAnimationFrame(animateStep);
-      }
-    }
-    requestAnimationFrame(animateStep);
-  }
-
-  // Função para animar a entrada (doll house view e transição para vista interativa)
-  function playEntryAnimation() {
-    // Definir a vista inicial do "doll house" -- vista aérea
-    const dollhouseCamPos = new THREE.Vector3(0, 50, 0);
-    const dollhouseTarget = new THREE.Vector3(0, 0, 0);
-    camera.position.copy(dollhouseCamPos);
-    controls.target.copy(dollhouseTarget);
+  
+  // Posiciona a câmera na cena
+  function positionCameraInScene(sceneData) {
+    if (!sceneData.center) return;
+    
+    // Posição inicial baseada no centro da cena
+    const center = new THREE.Vector3(...sceneData.center);
+    
+    // Define altura da câmera (1.6 metros)
+    center.y = 1.6;
+    
+    // Define posição da câmera
+    camera.position.copy(center);
+    
+    // Define alvo da câmera (olhando um pouco à frente)
+    const target = center.clone();
+    target.z -= 1; // Olhando para Z negativo (para frente)
+    
+    controls.target.copy(target);
     controls.update();
-    console.log('Iniciando vista Doll House');
-
-    // Após 1 segundo, transitar para a vista interativa padrão
-    setTimeout(() => {
-      const interactiveCamPos = new THREE.Vector3(0, 1.6, 3);
-      const interactiveTarget = new THREE.Vector3(0, 0, 0);
-      console.log('Transitando para vista interativa');
-      animateCameraTransition(interactiveCamPos, interactiveTarget, 2000);
-    }, 1000);
   }
-
-  // Modificar moveToLocation para usar transição suave
-  function moveToLocation(targetPos) {
-    // Define o novo alvo e a nova posição da câmera com um offset vertical
-    const newTarget = targetPos.clone();
-    const newCamPos = new THREE.Vector3(targetPos.x, targetPos.y + 1.6, targetPos.z);
-    console.log('Iniciando transição para: ', targetPos);
-    animateCameraTransition(newCamPos, newTarget, 1000);
+  
+  /*
+   * Interação e modos de visualização
+   */
+  
+  // Identificar objetos sob o cursor
+  function getIntersectedObjects(event) {
+    // Calcula posição do mouse em coordenadas normalizadas
+    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+    
+    // Configura o raycaster
+    raycaster.setFromCamera(mouse, camera);
+    
+    // Obtém objetos interceptados
+    return raycaster.intersectObjects(scene.children, true);
   }
-
-  // Função auxiliar para obter um ponto de medição baseando-se na nuvem de pontos
-  function getPointFromPointCloud(raycaster) {
-    if (currentPointCloud) {
-      raycaster.params.Points = { threshold: 0.2 };
-      const intersects = raycaster.intersectObject(currentPointCloud, true);
-      if (intersects.length > 0) {
-        return intersects[0].point;
-      }
+  
+  // Manipulador de clique
+  function onDocumentClick(event) {
+    event.preventDefault();
+    
+    // Não faz nada se estiver carregando
+    if (isLoading()) return;
+    
+    const intersects = getIntersectedObjects(event);
+    
+    // Se estiver no modo de medição
+    if (isMeasuring) {
+      handleMeasurementClick(intersects);
+      return;
     }
-    return null;
+    
+    // Se estiver no modo de tags
+    if (isTagMode) {
+      handleTagAddition(intersects);
+      return;
+    }
+    
+    // Navegação entre cenas
+    handleNavPointClick(intersects);
   }
-
-  function getMeasurePoint(raycaster, fallbackPlaneZ) {
-    let pt = getPointFromPointCloud(raycaster);
-    if (pt === null) {
-      fallbackPlaneZ = (fallbackPlaneZ !== undefined) ? fallbackPlaneZ : 0;
-      const plane = new THREE.Plane(new THREE.Vector3(0,0,1), -fallbackPlaneZ);
-      pt = new THREE.Vector3();
-      if (raycaster.ray.intersectPlane(plane, pt)) {
-        return pt;
+  
+  // Manipulador de movimento do mouse
+  function onDocumentMouseMove(event) {
+    // Obtenha os objetos sob o cursor
+    const intersects = getIntersectedObjects(event);
+    
+    // Atualiza o cursor conforme o objeto sob ele
+    updateCursorStyle(intersects);
+    
+    // Atualiza a pré-visualização da medição, se estiver medindo
+    if (isMeasuring && measurementPoints.length === 1) {
+      updateMeasurementPreview(intersects);
+    }
+  }
+  
+  // Atualiza o estilo do cursor com base no que está sob ele
+  function updateCursorStyle(intersects) {
+    if (intersects.length > 0) {
+      const intersectedObject = intersects[0].object;
+      
+      // Verifica o tipo de objeto e muda o cursor
+      if (intersectedObject.userData && intersectedObject.userData.type === 'navpoint') {
+        document.body.style.cursor = 'pointer';
+        showTooltip(intersectedObject.userData.name, intersects[0].point);
+      } else if (isMeasuring) {
+        document.body.style.cursor = 'crosshair';
+      } else if (isTagMode) {
+        document.body.style.cursor = 'cell';
       } else {
-        return null;
+        document.body.style.cursor = 'grab';
+        hideTooltip();
+      }
+      
+      // Destaca objeto ao passar o mouse
+      if (intersectedObject !== hoverState.mesh) {
+        if (hoverState.mesh) {
+          // Remove destaque do objeto anterior
+          if (hoverState.mesh.userData && hoverState.mesh.userData.type === 'navpoint') {
+            hoverState.mesh.material.color.setHex(0x3498db);
+            hoverState.mesh.scale.set(1, 1, 1);
+          }
+        }
+        
+        // Destaca o novo objeto
+        if (intersectedObject.userData && intersectedObject.userData.type === 'navpoint') {
+          intersectedObject.material.color.setHex(0xf39c12);
+          intersectedObject.scale.set(1.2, 1.2, 1.2);
+          hoverState.mesh = intersectedObject;
+        } else {
+          hoverState.mesh = null;
+        }
       }
     } else {
-      return pt;
-    }
-  }
-
-  // Função auxiliar para obter o ponto mais próximo na nuvem de pontos a partir da posição do mouse (em NDC)
-  function findNearestPoint(mouse, camera, pointCloud) {
-    if (!pointCloud || !pointCloud.geometry || !pointCloud.geometry.attributes.position) return null;
-    const positions = pointCloud.geometry.attributes.position.array;
-    const count = pointCloud.geometry.attributes.position.count;
-    let bestDistSq = Infinity;
-    const bestPoint = new THREE.Vector3();
-    const tempVec = new THREE.Vector3();
-    const worldVec = new THREE.Vector3();
-    const threshold = 0.1; // limiar em NDC (aumentado para melhorar a detecção)
-    console.log('findNearestPoint: Iniciando busca de pontos na nuvem, count =', (pointCloud && pointCloud.geometry && pointCloud.geometry.attributes.position ? pointCloud.geometry.attributes.position.count : 'indisponível'));
-
-    for (let i = 0; i < count; i++) {
-      tempVec.set(positions[i*3], positions[i*3+1], positions[i*3+2]);
-      worldVec.copy(tempVec);
-      pointCloud.localToWorld(worldVec);
-      // projeta o ponto para as coordenadas NDC
-      const ndc = worldVec.clone().project(camera);
-      const dx = ndc.x - mouse.x;
-      const dy = ndc.y - mouse.y;
-      const distSq = dx * dx + dy * dy;
-      if (distSq < bestDistSq) {
-        bestDistSq = distSq;
-        bestPoint.copy(worldVec);
-      }
-    }
-    return (bestDistSq <= threshold * threshold) ? bestPoint : null;
-  }
-
-  // Modificar handleMeasurementClick para iniciar e finalizar a medição interativa
-  function handleMeasurementClick(event) {
-    console.log('handleMeasurementClick acionado. isMeasuring:', isMeasuring);
-    console.log('currentPointCloud:', currentPointCloud);
-    const mouse = new THREE.Vector2(
-      (event.clientX / window.innerWidth) * 2 - 1,
-      -(event.clientY / window.innerHeight) * 2 + 1
-    );
-
-    // Se o clique for em um objeto de navegação, prioriza a movimentação da câmera
-    const raycaster = new THREE.Raycaster();
-    raycaster.setFromCamera(mouse, camera);
-    const intersects = raycaster.intersectObjects(scene.children, true);
-    if (intersects.length > 0 && intersects[0].object.userData && intersects[0].object.userData.nav) {
-      moveToLocation(intersects[0].object.position);
-      return;
-    }
-
-    if (!isMeasuring) {
-      console.log('Medição não ativada. Ignorando clique.');
-      return;
-    }
-
-    // Procura o ponto da nuvem mais próximo do clique
-    const point = findNearestPoint(mouse, camera, currentPointCloud);
-    if (!point) {
-      console.log('Nenhum ponto encontrado próximo ao clique.');
-      return; // se não encontrar ponto próximo, não realiza medição
-    }
-
-    if (measurementPoints.length === 0) {
-      measurementPoints.push(point);
-    } else if (measurementPoints.length === 1) {
-      measurementPoints.push(point);
-      updateMeasurementDisplayFinal();
-    }
-  }
-
-  function updateMeasurementDisplayFinal(){
-    if(measurementPoints.length === 2){
-      const distance = measurementPoints[0].distanceTo(measurementPoints[1]);
-      let display = document.getElementById('distance');
-      if(!display){
-        display = document.createElement('div');
-        display.id = 'distance';
-        display.style.position = 'absolute';
-        display.style.top = '10px';
-        display.style.right = '10px';
-        display.style.background = 'rgba(0,0,0,0.7)';
-        display.style.color = '#fff';
-        display.style.padding = '10px';
-        display.style.fontFamily = 'Arial, sans-serif';
-        document.body.appendChild(display);
-      }
-      display.textContent = 'Distância: ' + distance.toFixed(2) + ' m';
-
-      // Remove a linha de pré-visualização, se existir
-      if(window.measurementPreview){
-        scene.remove(window.measurementPreview);
-        window.measurementPreview = null;
-      }
-
-      // Remove a linha de medição anterior, se houver
-      if(window.measurementLine){
-        scene.remove(window.measurementLine);
-      }
-
-      const lineGeometry = new THREE.BufferGeometry().setFromPoints(measurementPoints);
-      const greenMaterial = new THREE.LineBasicMaterial({ color: 0x00ff00, linewidth: 4 });
-      const whiteMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 2 });
-
-      const greenLine = new THREE.Line(lineGeometry, greenMaterial);
-      const whiteLine = new THREE.Line(lineGeometry, whiteMaterial);
-
-      const measurementGroup = new THREE.Group();
-      measurementGroup.add(greenLine);
-      measurementGroup.add(whiteLine);
-
-      scene.add(measurementGroup);
-      window.measurementLine = measurementGroup;
-
-      measurementPoints = [];
-    }
-  }
-
-  // Adicionar nova função para atualizar a linha de pré-visualização da medição conforme o mouse se move
-  function onMeasurementMouseMove(event) {
-    if (isMeasuring && measurementPoints.length === 1) {
-      const mouse = new THREE.Vector2(
-        (event.clientX / window.innerWidth) * 2 - 1,
-        -(event.clientY / window.innerHeight) * 2 + 1
-      );
-
-      const previewPoint = findNearestPoint(mouse, camera, currentPointCloud);
-      if (previewPoint) {
-        if (window.measurementPreview) {
-          window.measurementPreview.geometry.setFromPoints([measurementPoints[0], previewPoint]);
-        } else {
-          const lineGeometry = new THREE.BufferGeometry().setFromPoints([measurementPoints[0], previewPoint]);
-          const lineMaterial = new THREE.LineDashedMaterial({ color: 0xff0000, dashSize: 0.5, gapSize: 0.2 });
-          const previewLine = new THREE.Line(lineGeometry, lineMaterial);
-          previewLine.computeLineDistances();
-          scene.add(previewLine);
-          window.measurementPreview = previewLine;
+      document.body.style.cursor = 'auto';
+      hideTooltip();
+      
+      // Remove destaque do objeto anterior se não estiver mais sob o cursor
+      if (hoverState.mesh) {
+        if (hoverState.mesh.userData && hoverState.mesh.userData.type === 'navpoint') {
+          hoverState.mesh.material.color.setHex(0x3498db);
+          hoverState.mesh.scale.set(1, 1, 1);
         }
-        let display = document.getElementById('distance');
-        if (!display) {
-          display = document.createElement('div');
-          display.id = 'distance';
-          display.style.position = 'absolute';
-          display.style.top = '10px';
-          display.style.right = '10px';
-          display.style.background = 'rgba(0,0,0,0.7)';
-          display.style.color = '#fff';
-          display.style.padding = '10px';
-          display.style.fontFamily = 'Arial, sans-serif';
-          document.body.appendChild(display);
-        }
-        const distance = measurementPoints[0].distanceTo(previewPoint);
-        display.textContent = 'Distância: ' + distance.toFixed(2) + ' m';
+        hoverState.mesh = null;
       }
     }
   }
-
-  window.toggleMeasurement = function(){
+  
+  // Mostra tooltip com informação
+  function showTooltip(text, position) {
+    let tooltip = document.getElementById('tooltip');
+    
+    if (!tooltip) {
+      tooltip = document.createElement('div');
+      tooltip.id = 'tooltip';
+      tooltip.className = 'tooltip';
+      document.body.appendChild(tooltip);
+    }
+    
+    tooltip.textContent = text;
+    tooltip.style.opacity = '1';
+    
+    // Converte posição 3D para coordenadas de tela
+    const vector = position.clone();
+    vector.project(camera);
+    
+    const x = (vector.x * 0.5 + 0.5) * window.innerWidth;
+    const y = (-vector.y * 0.5 + 0.5) * window.innerHeight;
+    
+    tooltip.style.left = `${x}px`;
+    tooltip.style.top = `${y - 30}px`;
+  }
+  
+  // Esconde tooltip
+  function hideTooltip() {
+    const tooltip = document.getElementById('tooltip');
+    if (tooltip) {
+      tooltip.style.opacity = '0';
+    }
+  }
+  
+  // Atualiza labels posicionados na cena
+  function updateLabelsPosition() {
+    scene.children.forEach(object => {
+      if (object.userData && object.userData.type === 'label') {
+        // Sempre de frente para a câmera
+        object.lookAt(camera.position);
+      }
+    });
+  }
+  
+  // Navega para outra cena
+  function navigateToScene(sceneIndex) {
+    if (sceneIndex >= 0 && sceneIndex < scenes.length) {
+      // Animação de fade out
+      fadeOut(function() {
+        currentSceneIndex = sceneIndex;
+        loadScene(scenes[sceneIndex]);
+        // Fade in após carregar
+        setTimeout(fadeIn, 500);
+      });
+    }
+  }
+  
+  // Trata clique em pontos de navegação
+  function handleNavPointClick(intersects) {
+    if (intersects.length > 0) {
+      const object = intersects[0].object;
+      
+      if (object.userData && object.userData.type === 'navpoint') {
+        navigateToScene(object.userData.targetScene);
+      }
+    }
+  }
+  
+  /*
+   * Funcionalidades de medição
+   */
+  
+  // Manipulador de clique para medição
+  function handleMeasurementClick(intersects) {
+    // Precisamos de interseções com a nuvem de pontos
+    if (intersects.length === 0) return;
+    
+    // Pega o ponto de interseção
+    const point = intersects[0].point.clone();
+    
+    // Adiciona ponto à lista de pontos de medição
+    measurementPoints.push(point);
+    
+    // Se tivermos dois pontos, podemos calcular e exibir a distância
+    if (measurementPoints.length === 2) {
+      displayMeasurement();
+    } else {
+      showMessage('Clique no segundo ponto para medir a distância');
+    }
+  }
+  
+  // Atualiza a pré-visualização da linha de medição
+  function updateMeasurementPreview(intersects) {
+    if (measurementPoints.length !== 1 || intersects.length === 0) return;
+    
+    const startPoint = measurementPoints[0];
+    const endPoint = intersects[0].point;
+    
+    // Se já temos uma linha de pré-visualização, atualizamos
+    if (measurementPreview) {
+      const positions = measurementPreview.geometry.attributes.position.array;
+      positions[3] = endPoint.x;
+      positions[4] = endPoint.y;
+      positions[5] = endPoint.z;
+      measurementPreview.geometry.attributes.position.needsUpdate = true;
+      
+      // Exibe distância em tempo real
+      const distance = startPoint.distanceTo(endPoint);
+      measureInfoElement.textContent = `Distância: ${distance.toFixed(2)} m`;
+    } else {
+      // Cria a linha de pré-visualização
+      const geometry = new THREE.BufferGeometry();
+      const positions = new Float32Array([
+        startPoint.x, startPoint.y, startPoint.z,
+        endPoint.x, endPoint.y, endPoint.z
+      ]);
+      
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      
+      const material = new THREE.LineBasicMaterial({
+        color: 0xff0000,
+        linewidth: 2,
+        dashSize: 1,
+        gapSize: 0.5
+      });
+      
+      measurementPreview = new THREE.Line(geometry, material);
+      scene.add(measurementPreview);
+      
+      // Exibe o elemento de informação de medição
+      measureInfoElement.style.display = 'block';
+    }
+  }
+  
+  // Exibe a medição final
+  function displayMeasurement() {
+    // Remove a pré-visualização
+    if (measurementPreview) {
+      scene.remove(measurementPreview);
+      measurementPreview = null;
+    }
+    
+    // Remove a linha anterior se existir
+    if (measurementLine) {
+      scene.remove(measurementLine);
+    }
+    
+    // Cria a linha de medição final
+    const geometry = new THREE.BufferGeometry();
+    const positions = new Float32Array([
+      measurementPoints[0].x, measurementPoints[0].y, measurementPoints[0].z,
+      measurementPoints[1].x, measurementPoints[1].y, measurementPoints[1].z
+    ]);
+    
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    
+    const material = new THREE.LineBasicMaterial({
+      color: 0x00ff00,
+      linewidth: 3
+    });
+    
+    measurementLine = new THREE.Line(geometry, material);
+    scene.add(measurementLine);
+    
+    // Calcula e exibe a distância
+    const distance = measurementPoints[0].distanceTo(measurementPoints[1]);
+    measureInfoElement.textContent = `Distância: ${distance.toFixed(2)} m`;
+    
+    // Adiciona esferas nos pontos de medição
+    addMeasurementPoints();
+    
+    // Limpa os pontos para próxima medição
+    measurementPoints = [];
+  }
+  
+  // Adiciona esferas nos pontos de medição
+  function addMeasurementPoints() {
+    measurementPoints.forEach(point => {
+      const geometry = new THREE.SphereGeometry(0.05, 16, 16);
+      const material = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+      const sphere = new THREE.Mesh(geometry, material);
+      sphere.position.copy(point);
+      scene.add(sphere);
+    });
+  }
+  
+  /*
+   * Funcionalidades de tags/anotações
+   */
+  
+  // Adiciona uma tag/anotação em um ponto
+  function handleTagAddition(intersects) {
+    if (intersects.length === 0) return;
+    
+    const point = intersects[0].point.clone();
+    
+    // Cria um modal para inserir informações da tag
+    const tagInfo = prompt('Descrição da anotação:');
+    if (!tagInfo) return;
+    
+    addTag(point, tagInfo);
+  }
+  
+  // Adiciona uma tag/anotação na cena
+  function addTag(position, info) {
+    // Cria elemento DOM para a tag
+    const tagElement = document.createElement('div');
+    tagElement.className = 'tag';
+    tagElement.innerHTML = '📌';
+    
+    // Adiciona tooltip com a informação
+    const tagInfoElement = document.createElement('div');
+    tagInfoElement.className = 'tag-info';
+    tagInfoElement.textContent = info;
+    tagElement.appendChild(tagInfoElement);
+    
+    document.body.appendChild(tagElement);
+    
+    // Cria o objeto 3D para a tag (esfera invisível para raycasting)
+    const tagGeometry = new THREE.SphereGeometry(0.1, 8, 8);
+    const tagMaterial = new THREE.MeshBasicMaterial({
+      color: 0xff0000,
+      transparent: true,
+      opacity: 0
+    });
+    
+    const tagMesh = new THREE.Mesh(tagGeometry, tagMaterial);
+    tagMesh.position.copy(position);
+    tagMesh.userData = {
+      type: 'tag',
+      info: info,
+      element: tagElement
+    };
+    
+    scene.add(tagMesh);
+    
+    // Adiciona a tag à lista
+    tags.push({
+      mesh: tagMesh,
+      element: tagElement,
+      position: position.clone(),
+      info: info
+    });
+    
+    // Posiciona o elemento DOM
+    updateTagPosition(tagMesh);
+    
+    showMessage('Anotação adicionada');
+  }
+  
+  // Atualiza a posição das tags na tela
+  function updateTagPosition(tagMesh) {
+    const vector = tagMesh.position.clone();
+    vector.project(camera);
+    
+    const x = (vector.x * 0.5 + 0.5) * window.innerWidth;
+    const y = (-vector.y * 0.5 + 0.5) * window.innerHeight;
+    
+    const tagElement = tagMesh.userData.element;
+    tagElement.style.left = `${x - 20}px`; // Centraliza (40px / 2)
+    tagElement.style.top = `${y - 20}px`; // Centraliza (40px / 2)
+    
+    // Verifica se está visível na cena (não atrás da câmera)
+    const dot = camera.position.clone().sub(tagMesh.position).normalize().dot(camera.getWorldDirection(new THREE.Vector3()));
+    
+    // Se o ponto estiver atrás da câmera ou muito longe, oculta
+    if (dot > 0 || vector.z > 1) {
+      tagElement.style.display = 'none';
+    } else {
+      tagElement.style.display = 'flex';
+    }
+  }
+  
+  // Atualiza a posição de todas as tags
+  function updateAllTagPositions() {
+    tags.forEach(tag => {
+      updateTagPosition(tag.mesh);
+    });
+  }
+  
+  /*
+   * Modos de visualização
+   */
+  
+  // Alterna o modo de medição
+  function toggleMeasureMode() {
     isMeasuring = !isMeasuring;
-    const btn = document.getElementById('toggleMeasure');
-    if(btn) btn.style.backgroundColor = isMeasuring ? '#4CAF50' : '';
-    console.log('toggleMeasurement: isMeasuring agora é', isMeasuring);
-  };
-
-  function createUIControls(){
-    const btn = document.createElement('button');
-    btn.innerText = 'Alternar Eixos/Grid';
-    btn.style.position = 'absolute';
-    btn.style.bottom = '10px';
-    btn.style.left = '10px';
-    btn.style.padding = '10px';
-    btn.style.backgroundColor = '#333';
-    btn.style.color = '#fff';
-    btn.style.border = 'none';
-    btn.style.cursor = 'pointer';
-    btn.addEventListener('click', () => {
-        if(axesHelper && gridHelper){
-            axesHelper.visible = !axesHelper.visible;
-            gridHelper.visible = !gridHelper.visible;
-        }
-    });
-    document.body.appendChild(btn);
-  }
-
-  // Adicionar a função flyToScene
-  function flyToScene(sceneData) {
-    if (!sceneData.center) return;
-    const center = new THREE.Vector3(sceneData.center[0], sceneData.center[1], sceneData.center[2]);
-    // Posição da câmera: 0 no X, -5 no Y (abaixo do centro) e 2 no Z
-    const cameraOffset = new THREE.Vector3(0, -5, 2);
-    const newCameraPos = center.clone().add(cameraOffset);
-    camera.position.set(newCameraPos.x, newCameraPos.y, newCameraPos.z);
     
-    // Alvo ajustado: 0 no X, +5 no Y (acima do centro) e 0 no Z
-    const targetOffset = new THREE.Vector3(0, 5, 0);
-    const newTarget = center.clone().add(targetOffset);
-    controls.target.copy(newTarget);
-    controls.update();
-  }
-
-  // Carrega a nuvem real utilizando PLYLoader
-  function loadPointCloud(cloudURL, center) {
-    console.log('Carregando nuvem de pontos de: ' + cloudURL);
-    const loader = new THREE.PLYLoader();
-    loader.load(cloudURL, geometry => {
-      console.log('PLY carregado com sucesso:', geometry);
-      geometry.computeVertexNormals();
-      const material = new THREE.PointsMaterial({
-        color: 0xFFA500,
-        size: 0.05,
-        sizeAttenuation: true
-      });
-      const pointCloud = new THREE.Points(geometry, material);
-      pointCloud.userData.keep = true;
-      // Se for passado o centro, recentro a nuvem
-      if(center) {
-        const offset = new THREE.Vector3(center[0], center[1], center[2]);
-        pointCloud.position.sub(offset);
+    if (isMeasuring) {
+      // Desativa outros modos
+      isTagMode = false;
+      
+      // Limpa pontos de medição anteriores
+      measurementPoints = [];
+      
+      // Remove linha anterior
+      if (measurementLine) {
+        scene.remove(measurementLine);
+        measurementLine = null;
       }
-      scene.add(pointCloud);
-      currentPointCloud = pointCloud;
-      console.log('Nuvem de pontos adicionada à cena.');
-      createNavigationCircles(geometry);
-    }, xhr => {
-      const percent = (xhr.loaded / xhr.total * 100).toFixed(2);
-      console.log(percent + '% carregado');
-    }, error => {
-      console.error('Erro ao carregar point cloud:', error);
-    });
-  }
-
-  // NOVAS FUNÇÕES PARA CARREGAR TODAS AS CENAS INTERLIGADAS
-
-  // Função para carregar todas as cenas do endpoint e adicionar cada uma na cena
-  function loadAllScenes() {
-    fetch('/api/matterport')
-      .then(response => response.json())
-      .then(scenes => {
-        console.log('Cenas completas:', scenes);
-        scenes.forEach(sceneData => {
-          loadSceneForMultiple(sceneData);
-        });
-      })
-      .catch(err => {
-        console.error('Erro ao carregar todas as cenas:', err);
-      });
-  }
-
-  // Função para carregar uma cena sem limpar o cenário (mantendo as nuvens já carregadas)
-  function loadSceneForMultiple(sceneData) {
-    // Adiciona marcador e label para a cena
-    if (sceneData.center) {
-      const markerGeometry = new THREE.SphereGeometry(1, 12, 12);
-      const markerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-      const marker = new THREE.Mesh(markerGeometry, markerMaterial);
-      marker.position.set(sceneData.center[0], sceneData.center[1], sceneData.center[2]);
-      scene.add(marker);
-
-      const sprite = makeTextSprite(sceneData.name);
-      sprite.position.set(sceneData.center[0], sceneData.center[1] + 2, sceneData.center[2]);
-      scene.add(sprite);
+      
+      // Remove pré-visualização
+      if (measurementPreview) {
+        scene.remove(measurementPreview);
+        measurementPreview = null;
+      }
+      
+      // Exibe mensagem de instrução
+      showMessage('Modo de medição ativado. Clique em dois pontos para medir a distância.');
+      measureInfoElement.textContent = 'Clique no primeiro ponto';
+      measureInfoElement.style.display = 'block';
+    } else {
+      // Esconde a informação de medição
+      measureInfoElement.style.display = 'none';
+      
+      // Remove pré-visualização
+      if (measurementPreview) {
+        scene.remove(measurementPreview);
+        measurementPreview = null;
+      }
+      
+      showMessage('Modo de medição desativado');
     }
     
-    // Carrega a nuvem de pontos para a cena, reposicionando-a com base no centro
-    if (sceneData.files && sceneData.files.cloud) {
-      loadPointCloudForScene(sceneData.files.cloud, sceneData.center);
+    updateUIState();
+  }
+  
+  // Alterna o modo de adição de tags
+  function toggleTagMode() {
+    isTagMode = !isTagMode;
+    
+    if (isTagMode) {
+      // Desativa outros modos
+      isMeasuring = false;
+      
+      showMessage('Modo de anotação ativado. Clique para adicionar uma anotação.');
+    } else {
+      showMessage('Modo de anotação desativado');
+    }
+    
+    updateUIState();
+  }
+  
+  // Alterna a visualização da planta baixa
+  function toggleFloorPlan() {
+    isFloorPlanVisible = !isFloorPlanVisible;
+    
+    floorPlanElement.style.display = isFloorPlanVisible ? 'block' : 'none';
+    
+    updateUIState();
+  }
+  
+  // Alterna a vista doll house
+  function toggleDollhouseView() {
+    isDollhouseMode = !isDollhouseMode;
+    
+    if (isDollhouseMode) {
+      // Salva posição atual da câmera
+      camera.userData.lastPosition = camera.position.clone();
+      camera.userData.lastTarget = controls.target.clone();
+      
+      // Move a câmera para cima, olhando para baixo
+      const currentScene = scenes[currentSceneIndex];
+      const center = currentScene.center ? new THREE.Vector3(...currentScene.center) : new THREE.Vector3(0, 0, 0);
+      
+      // Posição da câmera elevada
+      const dollhousePosition = center.clone().add(new THREE.Vector3(0, 15, 0));
+      
+      // Anima transição para dollhouse
+      animateCameraMove(dollhousePosition, center);
+      
+      showMessage('Vista Doll House ativada');
+    } else {
+      // Restaura posição anterior da câmera
+      if (camera.userData.lastPosition && camera.userData.lastTarget) {
+        animateCameraMove(camera.userData.lastPosition, camera.userData.lastTarget);
+      }
+      
+      showMessage('Vista normal restaurada');
+    }
+    
+    updateUIState();
+  }
+  
+  // Anima a movimentação da câmera
+  function animateCameraMove(targetPosition, lookAtTarget) {
+    const startPosition = camera.position.clone();
+    const startTarget = controls.target.clone();
+    let startTime = null;
+    const duration = 1000; // 1 segundo
+    
+    function animate(currentTime) {
+      if (!startTime) startTime = currentTime;
+      const elapsedTime = currentTime - startTime;
+      const progress = Math.min(elapsedTime / duration, 1);
+      
+      // Easing function (ease in-out)
+      const easedProgress = progress < 0.5
+        ? 4 * progress * progress * progress
+        : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+      
+      // Interpola posição
+      camera.position.lerpVectors(startPosition, targetPosition, easedProgress);
+      
+      // Interpola alvo
+      controls.target.lerpVectors(startTarget, lookAtTarget, easedProgress);
+      controls.update();
+      
+      if (progress < 1) {
+        requestAnimationFrame(animate);
+      }
+    }
+    
+    requestAnimationFrame(animate);
+  }
+  
+  // Inicia/para o tour automático
+  function toggleAutoTour() {
+    autoTourActive = !autoTourActive;
+    
+    if (autoTourActive) {
+      startAutoTour();
+      showMessage('Tour automático iniciado');
+    } else {
+      stopAutoTour();
+      showMessage('Tour automático parado');
+    }
+    
+    updateUIState();
+  }
+  
+  // Inicia o tour automático
+  function startAutoTour() {
+    let currentTourSceneIndex = 0;
+    
+    // Navega para a próxima cena a cada intervalo
+    autoTourInterval = setInterval(() => {
+      currentTourSceneIndex = (currentTourSceneIndex + 1) % scenes.length;
+      navigateToScene(currentTourSceneIndex);
+    }, 10000); // 10 segundos por cena
+  }
+  
+  // Para o tour automático
+  function stopAutoTour() {
+    if (autoTourInterval) {
+      clearInterval(autoTourInterval);
+      autoTourInterval = null;
+    }
+    autoTourActive = false;
+  }
+  
+  /*
+   * Utilitários de UI
+   */
+  
+  // Atualiza o estado visual dos botões da UI
+  function updateUIState() {
+    // Atualiza botão de medição
+    const measureBtn = document.getElementById('btn-measure');
+    if (isMeasuring) {
+      measureBtn.classList.add('active');
+    } else {
+      measureBtn.classList.remove('active');
+    }
+    
+    // Atualiza botão de tags
+    const tagsBtn = document.getElementById('btn-tags');
+    if (isTagMode) {
+      tagsBtn.classList.add('active');
+    } else {
+      tagsBtn.classList.remove('active');
+    }
+    
+    // Atualiza botão de doll house
+    const dollhouseBtn = document.getElementById('btn-dollhouse');
+    if (isDollhouseMode) {
+      dollhouseBtn.classList.add('active');
+    } else {
+      dollhouseBtn.classList.remove('active');
+    }
+    
+    // Atualiza botão de planta baixa
+    const floorplanBtn = document.getElementById('btn-floorplan');
+    if (isFloorPlanVisible) {
+      floorplanBtn.classList.add('active');
+    } else {
+      floorplanBtn.classList.remove('active');
+    }
+    
+    // Atualiza botão de tour
+    const tourBtn = document.getElementById('btn-tour');
+    if (autoTourActive) {
+      tourBtn.classList.add('active');
+    } else {
+      tourBtn.classList.remove('active');
     }
   }
-
-  // Função para carregar a nuvem de pontos para uma cena específica e reposicioná-la
-  function loadPointCloudForScene(cloudURL, center) {
-    console.log('Carregando nuvem da cena de: ' + cloudURL);
-    const loader = new THREE.PLYLoader();
-    loader.load(cloudURL, geometry => {
-      console.log('PLY carregado para cena:', geometry);
-      geometry.computeVertexNormals();
-      const material = new THREE.PointsMaterial({
-        color: 0xFFA500,
-        size: 0.05,
-        sizeAttenuation: true
-      });
-      const pointCloud = new THREE.Points(geometry, material);
-      pointCloud.userData.keep = true;
-      // Se o centro for fornecido, recentro a nuvem
-      if(center) {
-        const offset = new THREE.Vector3(center[0], center[1], center[2]);
-        pointCloud.position.sub(offset);
-      }
-      scene.add(pointCloud);
-      currentPointCloud = pointCloud;
-      console.log('Nuvem de pontos adicionada à cena para ' + cloudURL);
-    }, xhr => {
-      const percent = (xhr.loaded / xhr.total * 100).toFixed(2);
-      console.log(percent + '% carregado');
-    }, error => {
-      console.error('Erro ao carregar nuvem de pontos:', error);
-    });
+  
+  // Exibe uma mensagem informativa
+  function showMessage(text) {
+    infoElement.textContent = text;
+    infoElement.style.opacity = '1';
+    
+    // Esconde a mensagem após 3 segundos
+    setTimeout(() => {
+      infoElement.style.opacity = '0.7';
+    }, 3000);
   }
-
-  // Função para criar controles de medição
-  function createMeasurementToggleControl(){
-    const btn = document.createElement('button');
-    btn.id = 'toggleMeasure';
-    btn.innerText = 'Ativar Medição';
-    btn.style.position = 'absolute';
-    btn.style.bottom = '10px';
-    btn.style.right = '10px';
-    btn.style.padding = '10px';
-    btn.style.backgroundColor = '#333';
-    btn.style.color = '#fff';
-    btn.style.border = 'none';
-    btn.style.cursor = 'pointer';
-    btn.addEventListener('click', () => {
-      toggleMeasurement();
-      btn.innerText = isMeasuring ? 'Medição Ativada' : 'Ativar Medição';
-      console.log('Medição:', isMeasuring ? 'Ativada' : 'Desativada');
-    });
-    document.body.appendChild(btn);
+  
+  // Controla a exibição do overlay de carregamento
+  function showLoading(show) {
+    if (show) {
+      loadingOverlay.style.display = 'flex';
+      loadingOverlay.style.opacity = '1';
+    } else {
+      loadingOverlay.style.opacity = '0';
+      setTimeout(() => {
+        loadingOverlay.style.display = 'none';
+      }, 500);
+    }
   }
-
-  document.addEventListener('DOMContentLoaded', function() {
-    initViewer();
-  });
-})(); 
+  
+  // Verifica se está carregando
+  function isLoading() {
+    return loadingOverlay.style.display !== 'none' && loadingOverlay.style.opacity !== '0';
+  }
+  
+  // Efeito de fade out
+  function fadeOut(callback) {
+    const fadeOverlay = document.createElement('div');
+    fadeOverlay.style.position = 'fixed';
+    fadeOverlay.style.top = '0';
+    fadeOverlay.style.left = '0';
+    fadeOverlay.style.width = '100%';
+    fadeOverlay.style.height = '100%';
+    fadeOverlay.style.backgroundColor = '#000';
+    fadeOverlay.style.opacity = '0';
+    fadeOverlay.style.zIndex = '1000';
+    fadeOverlay.style.transition = 'opacity 0.5s';
+    document.body.appendChild(fadeOverlay);
+    
+    // Força reflow
+    void fadeOverlay.offsetWidth;
+    
+    fadeOverlay.style.opacity = '1';
+    
+    setTimeout(() => {
+      if (callback) callback();
+      
+      // Não remove o overlay ainda, será usado para fade in
+      fadeOverlay.id = 'fade-overlay';
+    }, 500);
+  }
+  
+  // Efeito de fade in
+  function fadeIn() {
+    const fadeOverlay = document.getElementById('fade-overlay');
+    if (!fadeOverlay) return;
+    
+    fadeOverlay.style.opacity = '0';
+    
+    setTimeout(() => {
+      document.body.removeChild(fadeOverlay);
+    }, 500);
+  }
+  
+  // Inicia o aplicativo quando o DOM estiver pronto
+  document.addEventListener('DOMContentLoaded', init);
+})();
