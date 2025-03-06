@@ -1,0 +1,5 @@
+opencv-python>=4.7.0
+pyproj>=3.6.1
+lxml>=4.9.0
+numpy>=1.24.0
+pdal>=3.0.0

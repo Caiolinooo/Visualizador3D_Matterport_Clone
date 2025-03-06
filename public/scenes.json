@@ -1,0 +1,146 @@
+[
+  {
+    "name": "E57_SIS_JACK_CLEAN_0125-1",
+    "position": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.0
+    },
+    "panorama": "/E57_SIS_JACK_CLEAN_0125-1/panorama.jpg"
+  },
+  {
+    "name": "E57_SIS_JACK_CLEAN_0125-10",
+    "position": {
+      "x": -2.25456349479411,
+      "y": 1.9444541183947779,
+      "z": -0.24860763385509443
+    },
+    "panorama": "/E57_SIS_JACK_CLEAN_0125-10/panorama.jpg"
+  },
+  {
+    "name": "E57_SIS_JACK_CLEAN_0125-11",
+    "position": {
+      "x": -1.3471799524799182,
+      "y": 1.0161692761013352,
+      "z": -0.3809066448470304
+    },
+    "panorama": "/E57_SIS_JACK_CLEAN_0125-11/panorama.jpg"
+  },
+  {
+    "name": "E57_SIS_JACK_CLEAN_0125-12",
+    "position": {
+      "x": -2.500618052443098,
+      "y": 2.4966597575933704,
+      "z": -0.587587628171427
+    },
+    "panorama": "/E57_SIS_JACK_CLEAN_0125-12/panorama.jpg"
+  },
+  {
+    "name": "E57_SIS_JACK_CLEAN_0125-13",
+    "position": {
+      "x": -2.0517404180960055,
+      "y": -5.393711835311729,
+      "z": 1.6472194462386156
+    },
+    "panorama": "/E57_SIS_JACK_CLEAN_0125-13/panorama.jpg"
+  },
+  {
+    "name": "E57_SIS_JACK_CLEAN_0125-14",
+    "position": {
+      "x": 3.9409686752200233,
+      "y": 4.318918342819132,
+      "z": 7.152802781237973
+    },
+    "panorama": "/E57_SIS_JACK_CLEAN_0125-14/panorama.jpg"
+  },
+  {
+    "name": "E57_SIS_JACK_CLEAN_0125-15",
+    "position": {
+      "x": 3.887171919864184,
+      "y": 1.5080275982716431,
+      "z": 7.127003968389253
+    },
+    "panorama": "/E57_SIS_JACK_CLEAN_0125-15/panorama.jpg"
+  },
+  {
+    "name": "E57_SIS_JACK_CLEAN_0125-16",
+    "position": {
+      "x": 4.00050397893704,
+      "y": 6.7853622902967485,
+      "z": 7.134851905726343
+    },
+    "panorama": "/E57_SIS_JACK_CLEAN_0125-16/panorama.jpg"
+  },
+  {
+    "name": "E57_SIS_JACK_CLEAN_0125-2",
+    "position": {
+      "x": -0.6086911381904923,
+      "y": 0.8736300702675921,
+      "z": -0.04390615134716569
+    },
+    "panorama": "/E57_SIS_JACK_CLEAN_0125-2/panorama.jpg"
+  },
+  {
+    "name": "E57_SIS_JACK_CLEAN_0125-3",
+    "position": {
+      "x": 0.6226417683296974,
+      "y": 0.8668903816049047,
+      "z": -0.10748326206798708
+    },
+    "panorama": "/E57_SIS_JACK_CLEAN_0125-3/panorama.jpg"
+  },
+  {
+    "name": "E57_SIS_JACK_CLEAN_0125-4",
+    "position": {
+      "x": 0.6658517572830771,
+      "y": 2.056148434968194,
+      "z": -0.04894919703724554
+    },
+    "panorama": "/E57_SIS_JACK_CLEAN_0125-4/panorama.jpg"
+  },
+  {
+    "name": "E57_SIS_JACK_CLEAN_0125-5",
+    "position": {
+      "x": 0.567204768559749,
+      "y": 2.516034234116101,
+      "z": -0.14071666681309836
+    },
+    "panorama": "/E57_SIS_JACK_CLEAN_0125-5/panorama.jpg"
+  },
+  {
+    "name": "E57_SIS_JACK_CLEAN_0125-6",
+    "position": {
+      "x": 0.7284193205995284,
+      "y": 4.28167928872755,
+      "z": 0.04728100537725055
+    },
+    "panorama": "/E57_SIS_JACK_CLEAN_0125-6/panorama.jpg"
+  },
+  {
+    "name": "E57_SIS_JACK_CLEAN_0125-7",
+    "position": {
+      "x": -0.00744247941743037,
+      "y": 4.821479353464144,
+      "z": -0.01736629646259047
+    },
+    "panorama": "/E57_SIS_JACK_CLEAN_0125-7/panorama.jpg"
+  },
+  {
+    "name": "E57_SIS_JACK_CLEAN_0125-8",
+    "position": {
+      "x": -1.204698306909955,
+      "y": 4.926414860529371,
+      "z": -0.01527736926378509
+    },
+    "panorama": "/E57_SIS_JACK_CLEAN_0125-8/panorama.jpg"
+  },
+  {
+    "name": "E57_SIS_JACK_CLEAN_0125-9",
+    "position": {
+      "x": -2.5212751068868253,
+      "y": 4.360100358857763,
+      "z": -0.09933788687769862
+    },
+    "panorama": "/E57_SIS_JACK_CLEAN_0125-9/panorama.jpg"
+  }
+]

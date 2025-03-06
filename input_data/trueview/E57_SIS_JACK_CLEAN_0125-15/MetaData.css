@@ -1,0 +1,76 @@
+BODY
+{
+	padding-right: 0px;
+	padding-left: 0px;
+	font-size: 9pt;
+	padding-bottom: 0px;
+	margin: 0px;
+	padding-top: 0px;
+	font-family: Tahoma, Verdana;
+	background-color: silver;
+}
+
+td
+{	
+}
+td.categoryTitle
+{
+	background-color:Background;
+	color:White;
+	font-size:12pt;
+	font:Arial;
+	text-align:center;	
+	font-weight:bold;
+	padding-right:10px;
+	padding-left:10px;
+}
+
+td.subCategoryTitle
+{
+	background-color:White;	
+	font-size: 10pt;
+	text-align:center;
+	padding-right:4px;
+	padding-left:4px;
+	color:Navy;
+	font-weight:bold;
+}
+
+td.itemName
+{
+	background-color:White;	
+	font-size: 10pt;
+	text-align:right;
+	padding-right:4px;
+	padding-left:4px;
+	color:Blue;
+}
+
+td.itemValue
+{
+	font-size: 10pt;
+	text-align:left;
+	padding-left:4px;
+	background-color:White;	
+	padding-right:4px;
+}
+
+td.itemNameA
+{
+	background-color:Transparent;	
+	font-size: 10pt;
+	text-align:right;
+	padding-right:4px;
+	padding-left:4px;
+	color:Blue;
+}
+
+td.itemValueA
+{
+	font-size: 10pt;
+	text-align:left;
+	padding-left:4px;
+	background-color:Transparent;	
+	padding-right:4px;
+}
+

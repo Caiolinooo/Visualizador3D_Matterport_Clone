@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>Visualizador 3D Profissional</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 100;
+            color: white;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            border-radius: 5px;
+            font-family: Arial, sans-serif;
+        }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        🎯 Medição: <span id="distance">0.00</span> metros
+        <br>
+        <button onclick="toggleMeasurement()">📏 Medir Distância</button>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'https://cdn.skypack.dev/three@0.136.0';
+        import { OrbitControls } from 'https://cdn.skypack.dev/three@0.136.0/examples/jsm/controls/OrbitControls.js';
+        import { initViewer } from './main.js';
+        
+        initViewer(THREE, OrbitControls);
+    </script>
+</body>
+</html>

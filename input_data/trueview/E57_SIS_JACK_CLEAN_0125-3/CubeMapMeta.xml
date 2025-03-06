@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<?xml-stylesheet type="text/xsl" href="CubeMap.xslt"?>
+<Lgshds:CubeMap xmlns:Lgshds="http://leica-geosystems.com/Lgshds">
+
+  <Lgshds:Uid>C979A75D-1457-4466-BFA1-0713FA53F329</Lgshds:Uid>
+
+  <Lgshds:Build>2.2.0.0</Lgshds:Build>
+
+  <Lgshds:alphaChannel>Off</Lgshds:alphaChannel>
+
+  <Lgshds:ScanMeta>
+    <Lgshds:databaseName>PERENCO_PPG1_SIS_JACK_09_01_2025</Lgshds:databaseName>
+    <Lgshds:scanWorldPath>\PERENCO_PPG1_SIS_JACK_09_01_2025\DEMANDAS\SISTEMA_HIDRAULICO_JACK\E57_SIS_JACK_CLEAN_0125\Registration 1\E57_SIS_JACK_CLEAN_0125-3</Lgshds:scanWorldPath>
+    <Lgshds:scanName>E57_SIS_JACK_CLEAN_0125-3</Lgshds:scanName>
+    <Lgshds:scannerModel>unknown</Lgshds:scannerModel>
+    <Lgshds:scannerId>0.0.0.0</Lgshds:scannerId>
+    <Lgshds:scanDate>12/31/1998 22:00:00</Lgshds:scanDate>
+    <Lgshds:creationDate>02/24/2025 16:32:00</Lgshds:creationDate>
+    <Lgshds:pointCount>15476687</Lgshds:pointCount>
+  </Lgshds:ScanMeta>
+
+  <Lgshds:CoordinateSystem>
+    <Lgshds:UpDirection>0</Lgshds:UpDirection>
+    <Lgshds:centerPointX>2.602234</Lgshds:centerPointX>
+    <Lgshds:centerPointY>5.987785</Lgshds:centerPointY>
+    <Lgshds:centerPointZ>62.411423</Lgshds:centerPointZ>
+    <Lgshds:coordSysType>XYZ</Lgshds:coordSysType>
+  </Lgshds:CoordinateSystem>
+
+  <Lgshds:PanoramaMeta>
+    <Lgshds:version>1.200000</Lgshds:version>
+    <Lgshds:distanceUnit>meters</Lgshds:distanceUnit>
+    <Lgshds:angularUnit>radians</Lgshds:angularUnit>
+    <Lgshds:lods>
+      <Lgshds:lod>
+        <Lgshds:size>1024</Lgshds:size>
+        <Lgshds:maxPointError>0.0</Lgshds:maxPointError>
+        <Lgshds:pointCount>0</Lgshds:pointCount>
+      </Lgshds:lod>
+      <Lgshds:lod>
+        <Lgshds:size>1024</Lgshds:size>
+        <Lgshds:maxPointError>0.0</Lgshds:maxPointError>
+        <Lgshds:pointCount>0</Lgshds:pointCount>
+      </Lgshds:lod>
+      <Lgshds:lod>
+        <Lgshds:size>1024</Lgshds:size>
+        <Lgshds:maxPointError>0.0</Lgshds:maxPointError>
+        <Lgshds:pointCount>0</Lgshds:pointCount>
+      </Lgshds:lod>
+      <Lgshds:lod>
+        <Lgshds:size>1024</Lgshds:size>
+        <Lgshds:maxPointError>0.0</Lgshds:maxPointError>
+        <Lgshds:pointCount>0</Lgshds:pointCount>
+      </Lgshds:lod>
+    </Lgshds:lods>
+    <Lgshds:lods2>
+      <Lgshds:lod>
+        <Lgshds:size>64</Lgshds:size>
+        <Lgshds:maxPointError>0.000000</Lgshds:maxPointError>
+        <Lgshds:pointCount>0</Lgshds:pointCount>
+      </Lgshds:lod>
+      <Lgshds:lod>
+        <Lgshds:size>128</Lgshds:size>
+        <Lgshds:maxPointError>0.000000</Lgshds:maxPointError>
+        <Lgshds:pointCount>0</Lgshds:pointCount>
+      </Lgshds:lod>
+      <Lgshds:lod>
+        <Lgshds:size>256</Lgshds:size>
+        <Lgshds:maxPointError>0.000000</Lgshds:maxPointError>
+        <Lgshds:pointCount>0</Lgshds:pointCount>
+      </Lgshds:lod>
+      <Lgshds:lod>
+        <Lgshds:size>512</Lgshds:size>
+        <Lgshds:maxPointError>0.000000</Lgshds:maxPointError>
+        <Lgshds:pointCount>0</Lgshds:pointCount>
+      </Lgshds:lod>
+    </Lgshds:lods2>
+    <Lgshds:hasPointData>FALSE</Lgshds:hasPointData>
+  </Lgshds:PanoramaMeta>
+
+  <Lgshds:ViewDefaults>
+    <Lgshds:distanceUnit>meters</Lgshds:distanceUnit>
+    <Lgshds:angularUnit>radians</Lgshds:angularUnit>
+    <Lgshds:fieldOfView>0.785398</Lgshds:fieldOfView>
+    <Lgshds:azimuth>0.0</Lgshds:azimuth>
+    <Lgshds:elevation>0.0</Lgshds:elevation>
+  </Lgshds:ViewDefaults>
+
+  <Lgshds:LODMeta>
+    <Lgshds:lodSize>256</Lgshds:lodSize>
+    <Lgshds:maxPointError>0.000000</Lgshds:maxPointError>
+    <Lgshds:pointCount>0</Lgshds:pointCount>
+  </Lgshds:LODMeta>
+
+  <Lgshds:OwnerInfo>
+    <Lgshds:company></Lgshds:company>
+    <Lgshds:companyUrl></Lgshds:companyUrl>
+    <Lgshds:contact></Lgshds:contact>
+    <Lgshds:copyright></Lgshds:copyright>
+    <Lgshds:projectUrl></Lgshds:projectUrl>
+    <Lgshds:publisher></Lgshds:publisher>
+    <Lgshds:publisherUrl></Lgshds:publisherUrl>
+    <Lgshds:publisherEmail></Lgshds:publisherEmail>
+  </Lgshds:OwnerInfo>
+
+  <Lgshds:SiteMap URL="../SiteMap.htm"></Lgshds:SiteMap>
+
+  <Lgshds:MaxVisibleNeighbors>-1</Lgshds:MaxVisibleNeighbors>
+
+  <Lgshds:ShowNeighborLabels>YES</Lgshds:ShowNeighborLabels>
+
+  <Lgshds:Neighbors>
+    <Lgshds:Neighbor Name="E57_SIS_JACK_CLEAN_0125-1" URL="../E57_SIS_JACK_CLEAN_0125-1/TruView.xml" X="-1.176334" Y="-0.011425" Z="1.060085"></Lgshds:Neighbor>
+    <Lgshds:Neighbor Name="E57_SIS_JACK_CLEAN_0125-2" URL="../E57_SIS_JACK_CLEAN_0125-2/TruView.xml" X="-1.855766" Y="-0.017061" Z="-0.086464"></Lgshds:Neighbor>
+    <Lgshds:Neighbor Name="E57_SIS_JACK_CLEAN_0125-4" URL="../E57_SIS_JACK_CLEAN_0125-4/TruView.xml" X="0.157218" Y="0.000332" Z="-1.050315"></Lgshds:Neighbor>
+    <Lgshds:Neighbor Name="E57_SIS_JACK_CLEAN_0125-5" URL="../E57_SIS_JACK_CLEAN_0125-5/TruView.xml" X="-0.137881" Y="-0.239189" Z="-1.552372"></Lgshds:Neighbor>
+    <Lgshds:Neighbor Name="E57_SIS_JACK_CLEAN_0125-6" URL="../E57_SIS_JACK_CLEAN_0125-6/TruView.xml" X="0.237908" Y="0.005684" Z="-3.266643"></Lgshds:Neighbor>
+    <Lgshds:Neighbor Name="E57_SIS_JACK_CLEAN_0125-7" URL="../E57_SIS_JACK_CLEAN_0125-7/TruView.xml" X="-0.866200" Y="0.004510" Z="-4.089240"></Lgshds:Neighbor>
+    <Lgshds:Neighbor Name="E57_SIS_JACK_CLEAN_0125-8" URL="../E57_SIS_JACK_CLEAN_0125-8/TruView.xml" X="-2.386494" Y="-0.018020" Z="-4.099539"></Lgshds:Neighbor>
+    <Lgshds:Neighbor Name="E57_SIS_JACK_CLEAN_0125-9" URL="../E57_SIS_JACK_CLEAN_0125-9/TruView.xml" X="-3.724154" Y="-0.020087" Z="-3.131890"></Lgshds:Neighbor>
+    <Lgshds:Neighbor Name="E57_SIS_JACK_CLEAN_0125-10" URL="../E57_SIS_JACK_CLEAN_0125-10/TruView.xml" X="-3.253493" Y="-0.018176" Z="-1.100732"></Lgshds:Neighbor>
+    <Lgshds:Neighbor Name="E57_SIS_JACK_CLEAN_0125-11" URL="../E57_SIS_JACK_CLEAN_0125-11/TruView.xml" X="-2.476516" Y="-0.589572" Z="-0.153682"></Lgshds:Neighbor>
+    <Lgshds:Neighbor Name="E57_SIS_JACK_CLEAN_0125-12" URL="../E57_SIS_JACK_CLEAN_0125-12/TruView.xml" X="-3.321387" Y="-0.593056" Z="-1.467383"></Lgshds:Neighbor>
+    <Lgshds:Neighbor Name="E57_SIS_JACK_CLEAN_0125-13" URL="../E57_SIS_JACK_CLEAN_0125-13/TruView.xml" X="-3.468016" Y="2.600971" Z="8.302323"></Lgshds:Neighbor>
+    <Lgshds:Neighbor Name="E57_SIS_JACK_CLEAN_0125-14" URL="../E57_SIS_JACK_CLEAN_0125-14/TruView.xml" X="5.014674" Y="8.049464" Z="-3.531888"></Lgshds:Neighbor>
+    <Lgshds:Neighbor Name="E57_SIS_JACK_CLEAN_0125-15" URL="../E57_SIS_JACK_CLEAN_0125-15/TruView.xml" X="4.987825" Y="8.050428" Z="-0.517760"></Lgshds:Neighbor>
+    <Lgshds:Neighbor Name="E57_SIS_JACK_CLEAN_0125-16" URL="../E57_SIS_JACK_CLEAN_0125-16/TruView.xml" X="5.082259" Y="8.054463" Z="-6.159026"></Lgshds:Neighbor>
+  </Lgshds:Neighbors>
+
+  <Lgshds:StationIconRadius>8</Lgshds:StationIconRadius>
+
+</Lgshds:CubeMap>

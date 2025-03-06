@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Projeto Matterport Clone</title>
+    <link rel="icon" href="favicon.ico" type="image/x-icon" />
+    <style>
+      body { margin: 0; overflow: hidden; }
+      canvas { display: block; }
+      #info {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        color: #fff;
+        background: rgba(0,0,0,0.5);
+        padding: 10px;
+        font-family: Arial, sans-serif;
+      }
+    </style>
+    <!-- Certifique-se de incluir o three.js (versão adequada) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+    <script src="https://unpkg.com/three@0.128/examples/js/loaders/PLYLoader.js"></script>
+  </head>
+  <body>
+    <button id="toggleMeasure" onclick="toggleMeasurement()">Medir</button>
+    <div id="info">Carregando cenas...</div>
+    <script src="main.js"></script>
+  </body>
+</html>
