@@ -145,277 +145,173 @@ function findPanoramicImage(sceneDir, sceneName) {
   return panoramaUrl;
 }
 
-// Versão assíncrona de scanFaroScenes
-async function scanFaroScenesAsync() {
-  try {
-    // Verifica a fonte de dados (pode ser diretório de scans ou TrueView)
-    const scansDir = path.join(__dirname, 'input_data', 'scans');
-    const trueviewDir = path.join(__dirname, 'input_data', 'trueview');
-    
-    let scenes = [];
-    
-    // 1. Primeiro verifica diretório de scans (arquivos PTS)
-    if (fs.existsSync(scansDir)) {
-      const scanFiles = fs.readdirSync(scansDir).filter(f => 
-        f.toLowerCase().endsWith('.pts') || f.toLowerCase().endsWith('.e57')
-      );
-      
-      for (const scanFile of scanFiles) {
-        const sceneName = path.parse(scanFile).name;
-        const filePath = path.join(scansDir, scanFile);
-        
-        // Verifica metadados para coordenadas
-        const metaFile = path.join(scansDir, sceneName, 'CubeMapMeta.xml');
-        let coordinates = [0, 0, 0];
-        
-        if (fs.existsSync(metaFile)) {
-          try {
-            const coords = await extractCoordinates(metaFile);
-            coordinates = [coords.x, coords.y, coords.z];
-          } catch (e) {
-            console.error(`Erro ao processar metadados para ${sceneName}:`, e);
-          }
-        }
-        
-        // Encontra panorâmica correspondente
-        const panoramaUrl = findPanoramicImage(scansDir, sceneName);
-        
-        // Arquivos de saída para esta cena
-        const outputDir = path.join(__dirname, 'output', sceneName);
-        const outputFiles = {};
-        
-        if (fs.existsSync(outputDir)) {
-          const files = fs.readdirSync(outputDir);
-          
-          // Mapeia arquivos de saída importantes
-          if (files.includes('output_cloud.ply')) {
-            outputFiles.cloud = `/output/${sceneName}/output_cloud.ply`;
-          }
-          
-          if (files.includes('output_mesh.ply')) {
-            outputFiles.mesh = `/output/${sceneName}/output_mesh.ply`;
-          }
-          
-          if (files.includes('floor_plan.png')) {
-            outputFiles.floor_plan = `/output/${sceneName}/floor_plan.png`;
-          }
-          
-          // Verifica se o arquivo PTS foi copiado para a saída
-          const ptsCopy = files.find(f => f.toLowerCase().endsWith('.pts'));
-          if (ptsCopy) {
-            outputFiles.pts = `/output/${sceneName}/${ptsCopy}`;
-          }
-        }
-        
-        scenes.push({
-          name: sceneName,
-          source: 'scan',
-          center: coordinates,
-          files: {
-            original: `/input_data/scans/${scanFile}`,
-            panorama: panoramaUrl,
-            ...outputFiles
-          }
-        });
-      }
-    }
-    
-    // 2. Verifica diretório TrueView para scans processados pelo Faro
-    if (fs.existsSync(trueviewDir)) {
-      const trueviewScans = fs.readdirSync(trueviewDir).filter(f => 
-        fs.statSync(path.join(trueviewDir, f)).isDirectory() &&
-        fs.existsSync(path.join(trueviewDir, f, 'CubeMapMeta.xml'))
-      );
-      
-      for (const scanDir of trueviewScans) {
-        const metaFile = path.join(trueviewDir, scanDir, 'CubeMapMeta.xml');
-        let coordinates = [0, 0, 0];
-        
-        try {
-          const coords = await extractCoordinates(metaFile);
-          coordinates = [coords.x, coords.y, coords.z];
-        } catch (e) {
-          console.error(`Erro ao processar metadados TrueView para ${scanDir}:`, e);
-        }
-        
-        // Encontra o cubo de alta resolução
-        const cubeImages = {};
-        for (let i = 0; i < 6; i++) {
-          const imgFile = path.join(trueviewDir, scanDir, `Rgb_${i}_1024.JPG`);
-          if (fs.existsSync(imgFile)) {
-            cubeImages[`face${i}`] = `/input_data/trueview/${scanDir}/Rgb_${i}_1024.JPG`;
-          } else {
-            const pngFile = path.join(trueviewDir, scanDir, `Rgb_${i}_1024.PNG`);
-            if (fs.existsSync(pngFile)) {
-              cubeImages[`face${i}`] = `/input_data/trueview/${scanDir}/Rgb_${i}_1024.PNG`;
-            }
-          }
-        }
-        
-        scenes.push({
-          name: scanDir,
-          source: 'trueview',
-          center: coordinates,
-          files: {
-            meta: `/input_data/trueview/${scanDir}/CubeMapMeta.xml`,
-            cube: cubeImages,
-            // Para compatibilidade com a interface
-            panorama: cubeImages.face0 // Temporariamente usa face frontal
-          }
-        });
-      }
-    }
-    
-    // 3. Verifica pasta de saída para informações adicionais
-    const outputDir = path.join(__dirname, 'output');
-    if (fs.existsSync(outputDir)) {
-      // Procura por summary.json
-      const summaryFile = path.join(outputDir, 'summary.json');
-      if (fs.existsSync(summaryFile)) {
-        try {
-          const summary = JSON.parse(fs.readFileSync(summaryFile, 'utf8'));
-          
-          // Atualiza as cenas com informações adicionais
-          for (const [sceneName, files] of Object.entries(summary)) {
-            const existingScene = scenes.find(s => s.name === sceneName);
-            
-            if (existingScene) {
-              // Atualiza informações para cena existente
-              const fileMap = {};
-              files.forEach(file => {
-                if (file.toLowerCase().includes('cloud')) {
-                  fileMap.cloud = `/output/${sceneName}/${file}`;
-                } else if (file.toLowerCase().includes('mesh')) {
-                  fileMap.mesh = `/output/${sceneName}/${file}`;
-                } else if (file.toLowerCase().includes('floor')) {
-                  fileMap.floor_plan = `/output/${sceneName}/${file}`;
-                } else if (file.toLowerCase().endsWith('.pts')) {
-                  fileMap.pts = `/output/${sceneName}/${file}`;
-                } else if (/\.(jpg|jpeg|png)$/i.test(file) && !fileMap.panorama) {
-                  fileMap.panorama = `/output/${sceneName}/${file}`;
-                }
-              });
-              
-              existingScene.files = { ...existingScene.files, ...fileMap };
-            } else {
-              // Cria uma nova cena se ainda não existe
-              const fileMap = {};
-              files.forEach(file => {
-                if (file.toLowerCase().includes('cloud')) {
-                  fileMap.cloud = `/output/${sceneName}/${file}`;
-                } else if (file.toLowerCase().includes('mesh')) {
-                  fileMap.mesh = `/output/${sceneName}/${file}`;
-                } else if (file.toLowerCase().includes('floor')) {
-                  fileMap.floor_plan = `/output/${sceneName}/${file}`;
-                } else if (file.toLowerCase().endsWith('.pts')) {
-                  fileMap.pts = `/output/${sceneName}/${file}`;
-                } else if (/\.(jpg|jpeg|png)$/i.test(file) && !fileMap.panorama) {
-                  fileMap.panorama = `/output/${sceneName}/${file}`;
-                }
-              });
-              
-              // Verifica se tem coordenadas
-              const centerFile = path.join(outputDir, sceneName, 'center_coordinates.txt');
-              let coordinates = [0, 0, 0];
-              
-              if (fs.existsSync(centerFile)) {
-                try {
-                  const centerContent = fs.readFileSync(centerFile, 'utf8');
-                  const match = centerContent.match(/Centro:\s*\[(.*)\]/);
-                  if (match) {
-                    coordinates = match[1].split(',').map(Number);
-                  }
-                } catch (e) {
-                  console.error(`Erro ao ler coordenadas para ${sceneName}:`, e);
-                }
-              }
-              
-              scenes.push({
-                name: sceneName,
-                source: 'processed',
-                center: coordinates,
-                files: fileMap
-              });
-            }
-          }
-        } catch (e) {
-          console.error('Erro ao processar summary.json:', e);
-        }
-      }
-    }
-    
-    // Se não encontrou cenas, cria uma cena demo
-    if (scenes.length === 0) {
-      // Verifica se há panorama na pasta public
-      const demoPanorama = path.join(__dirname, 'public', 'panorama.jpg');
-      if (fs.existsSync(demoPanorama)) {
-        scenes.push({
-          name: "Demo",
-          source: "demo",
-          center: [0, 0, 0],
-          files: {
-            panorama: "/panorama.jpg"
-          }
-        });
-      }
-    }
-    
-    // Ordena as cenas por nome
-    scenes.sort((a, b) => a.name.localeCompare(b.name));
-    
-    // Atualiza o cache
-    dataCache.scenes = scenes;
-    dataCache.lastUpdated = new Date();
-    
+// Função para coletar dados das cenas processadas
+async function collectSceneData() {
+  const scenes = [];
+  const outputDir = path.join(__dirname, 'output');
+  const panoramaDir = path.join(__dirname, 'input', 'panorama');
+  const trueviewDir = path.join(__dirname, 'input', 'trueview');
+  
+  // Verifica se a pasta output existe
+  if (!fs.existsSync(outputDir)) {
+    console.warn('Pasta output não encontrada');
     return scenes;
-  } catch (error) {
-    console.error('Erro ao escanear cenas:', error);
-    throw error;
   }
+  
+  // Lista todas as pastas dentro de output (cada uma é uma cena)
+  const folders = fs.readdirSync(outputDir);
+  
+  for (const folder of folders) {
+    const folderPath = path.join(outputDir, folder);
+    
+    // Verifica se é um diretório
+    if (fs.statSync(folderPath).isDirectory()) {
+      // Verifica arquivos necessários
+      const cloudPath = path.join(folderPath, 'output_cloud.ply');
+      const floorPlanPath = path.join(folderPath, 'floor_plan.png');
+      const centerPath = path.join(folderPath, 'center_coordinates.txt');
+      
+      // Verifica se pelo menos o cloud existe
+      if (fs.existsSync(cloudPath)) {
+        // Lê coordenadas do centro se disponíveis
+        let center = [0, 0, 0]; // Valor padrão
+        if (fs.existsSync(centerPath)) {
+          try {
+            const centerContent = fs.readFileSync(centerPath, 'utf8');
+            // Extrai as coordenadas usando regex
+            const match = centerContent.match(/\[(.*?)\]/);
+            if (match) {
+              center = JSON.parse('[' + match[1] + ']');
+            }
+          } catch (e) {
+            console.error(`Erro ao ler coordenadas da cena ${folder}:`, e);
+          }
+        }
+        
+        // Cria objeto da cena
+        const scene = {
+          name: folder,
+          center: center,
+          files: {
+            cloud: `/output/${folder}/output_cloud.ply`,
+          }
+        };
+        
+        // Adiciona planta baixa se existir
+        if (fs.existsSync(floorPlanPath)) {
+          scene.files.floor_plan = `/output/${folder}/floor_plan.png`;
+        }
+        
+        // Verifica se há panorâmicas disponíveis
+        // Primeiro verifica na pasta de panoramas
+        const panoramaFolder = path.join(panoramaDir, folder);
+        if (fs.existsSync(panoramaFolder)) {
+          const panoramaFiles = fs.readdirSync(panoramaFolder)
+            .filter(file => file.endsWith('.jpg') || file.endsWith('.png'));
+          
+          if (panoramaFiles.length > 0) {
+            scene.files.panorama = `/input/panorama/${folder}/${panoramaFiles[0]}`;
+            console.log(`Panorama encontrado para ${folder}: ${panoramaFiles[0]}`);
+          }
+        } else {
+          // Se não encontrou pasta específica, procura por qualquer arquivo com mesmo nome
+          const panoramaFiles = fs.readdirSync(panoramaDir)
+            .filter(file => (file.endsWith('.jpg') || file.endsWith('.png')) && 
+                           file.toLowerCase().includes(folder.toLowerCase()));
+          
+          if (panoramaFiles.length > 0) {
+            scene.files.panorama = `/input/panorama/${panoramaFiles[0]}`;
+            console.log(`Panorama correspondente para ${folder}: ${panoramaFiles[0]}`);
+          }
+        }
+        
+        // Se não encontrou panorama, verifica no TrueView
+        if (!scene.files.panorama) {
+          // Verifica se o nome da pasta do TrueView corresponde ao nome da cena
+          const trueviewFolder = path.join(trueviewDir, folder);
+          if (fs.existsSync(trueviewFolder)) {
+            // Procura pelo arquivo de configuração do cubemap
+            const configFiles = fs.readdirSync(trueviewFolder)
+              .filter(file => file.includes('cubemap') && file.endsWith('.json'));
+            
+            if (configFiles.length > 0) {
+              scene.files.cubemap = {
+                config: `/input/trueview/${folder}/${configFiles[0]}`,
+                folder: `/input/trueview/${folder}/`
+              };
+              console.log(`Cubemap TrueView encontrado para ${folder}: ${configFiles[0]}`);
+            }
+          } else {
+            // Se não encontrou pasta específica, procura por qualquer pasta com mesmo nome
+            const trueviewFolders = fs.readdirSync(trueviewDir)
+              .filter(dir => fs.statSync(path.join(trueviewDir, dir)).isDirectory() && 
+                            dir.toLowerCase().includes(folder.toLowerCase()));
+            
+            if (trueviewFolders.length > 0) {
+              const tvFolder = trueviewFolders[0];
+              const configFiles = fs.readdirSync(path.join(trueviewDir, tvFolder))
+                .filter(file => file.includes('cubemap') && file.endsWith('.json'));
+              
+              if (configFiles.length > 0) {
+                scene.files.cubemap = {
+                  config: `/input/trueview/${tvFolder}/${configFiles[0]}`,
+                  folder: `/input/trueview/${tvFolder}/`
+                };
+                console.log(`Cubemap TrueView correspondente para ${folder}: ${tvFolder}/${configFiles[0]}`);
+              }
+            }
+          }
+        }
+        
+        scenes.push(scene);
+      }
+    }
+  }
+  
+  // Se não encontrou nenhuma cena processada, verifica se há arquivos PTS para processar
+  if (scenes.length === 0) {
+    const ptsDir = path.join(__dirname, 'input', 'pts');
+    if (fs.existsSync(ptsDir)) {
+      const ptsFiles = fs.readdirSync(ptsDir)
+        .filter(file => file.endsWith('.pts'));
+      
+      if (ptsFiles.length > 0) {
+        console.log('Nenhuma cena processada encontrada, mas há arquivos PTS disponíveis para processamento');
+        // Informa ao cliente que há dados disponíveis, mas precisam ser processados
+        scenes.push({
+          name: "Dados não processados",
+          message: "Execute o process.py para processar os dados",
+          status: "pending",
+          files: {}
+        });
+      }
+    }
+  }
+  
+  return scenes;
 }
 
-// Endpoint para listar cenas disponíveis (compatibilidade com API existente)
-app.get('/api/scenes', async (req, res) => {
-  // Usa o cache se disponível e recente (menos de 5 minutos)
-  if (dataCache.scenes && dataCache.lastUpdated && 
-      (new Date() - dataCache.lastUpdated) < 5 * 60 * 1000) {
-    return res.json(dataCache.scenes);
-  }
-  
-  try {
-    const scenes = await scanFaroScenesAsync();
-    res.json(scenes);
-  } catch (error) {
-    console.error('Erro ao obter cenas:', error);
-    res.status(500).json({ error: 'Erro ao carregar cenas', details: error.message });
-  }
-});
-
-// Endpoint para o visualizador estilo Matterport
+// Endpoint para obter dados do Matterport otimizado
 app.get('/api/matterport', async (req, res) => {
-  // Usa o cache se disponível e recente (menos de 5 minutos)
-  if (dataCache.scenes && dataCache.lastUpdated && 
-      (new Date() - dataCache.lastUpdated) < 5 * 60 * 1000) {
-    return res.json(dataCache.scenes);
-  }
-  
   try {
-    const scenes = await scanFaroScenesAsync();
+    const scenes = await collectSceneData();
+    
+    // Se não encontrou cenas, retorna uma cena demo
+    if (scenes.length === 0) {
+      return res.json([{
+        name: "Cena Demo",
+        source: "fallback",
+        center: [0, 0, 0],
+        files: {
+          panorama: "/demo_panorama.jpg"
+        }
+      }]);
+    }
+    
     res.json(scenes);
   } catch (error) {
-    console.error('Erro ao obter cenas para Matterport:', error);
-    
-    // Retorna pelo menos uma cena básica para teste
-    const fallbackScene = {
-      name: "Demo",
-      source: "fallback",
-      center: [0, 0, 0],
-      files: {
-        panorama: "/panorama.jpg"
-      }
-    };
-    
-    res.json([fallbackScene]);
+    console.error('Erro ao processar cenas:', error);
+    res.status(500).json({ error: 'Erro ao processar cenas' });
   }
 });
 
@@ -457,6 +353,89 @@ function createDemoData() {
 // Criar dados de demonstração
 createDemoData();
 
+// Adicione esta função para criar uma imagem demo diretamente
+function createDemoPanorama() {
+  const fs = require('fs');
+  const path = require('path');
+  const { createCanvas } = require('canvas');
+  
+  // Caminho para o arquivo de saída
+  const outputPath = path.join(__dirname, 'public', 'demo_panorama.jpg');
+  
+  // Verifica se o arquivo já existe
+  if (fs.existsSync(outputPath)) {
+    console.log('Imagem demo já existe, pulando criação');
+    return;
+  }
+  
+  try {
+    // Cria um canvas para a imagem demo
+    const canvas = createCanvas(2048, 1024);
+    const ctx = canvas.getContext('2d');
+    
+    // Preenche com um gradiente de fundo
+    const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    gradient.addColorStop(0, '#0055AA');
+    gradient.addColorStop(0.5, '#3388CC');
+    gradient.addColorStop(1, '#66AADD');
+    
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    // Adiciona um padrão de grade
+    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+    ctx.lineWidth = 2;
+    
+    const gridSize = 64;
+    for (let x = 0; x < canvas.width; x += gridSize) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, canvas.height);
+      ctx.stroke();
+    }
+    
+    for (let y = 0; y < canvas.height; y += gridSize) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(canvas.width, y);
+      ctx.stroke();
+    }
+    
+    // Adiciona texto
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 64px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('PANORAMA DEMO', canvas.width/2, canvas.height/2 - 50);
+    
+    ctx.font = '32px Arial';
+    ctx.fillText('Esta é uma imagem panorâmica de demonstração', canvas.width/2, canvas.height/2 + 30);
+    ctx.fillText('Substitua por uma imagem panorâmica real', canvas.width/2, canvas.height/2 + 80);
+    
+    // Salva o canvas como JPEG
+    const buffer = canvas.toBuffer('image/jpeg', { quality: 0.8 });
+    fs.writeFileSync(outputPath, buffer);
+    
+    console.log(`Imagem demo criada em ${outputPath}`);
+  } catch (error) {
+    console.error('Erro ao criar imagem demo:', error);
+    
+    // Fallback: Copia uma imagem de outro lugar, se existir
+    try {
+      const alternateSourcePath = path.join(__dirname, 'public', 'fallback_panorama.jpg');
+      if (fs.existsSync(alternateSourcePath)) {
+        fs.copyFileSync(alternateSourcePath, outputPath);
+        console.log('Usando imagem fallback como demo');
+      }
+    } catch (e) {
+      console.error('Erro ao usar imagem fallback:', e);
+    }
+  }
+}
+
+// Chame essa função antes de iniciar o servidor
+// createDemoPanorama();
+
 // Inicia o servidor - bind em 0.0.0.0 para garantir acessibilidade
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Servidor rodando em http://localhost:${PORT}`);
@@ -478,3 +457,58 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`- ${dir}: ${fs.existsSync(fullPath) ? 'Existe' : 'Não existe'}`);
   });
 });
+
+// Rota de saúde para verificar se o servidor está funcionando
+app.get('/api/health', (req, res) => {
+  res.status(200).json({ status: 'ok' });
+});
+
+// Para qualquer outra rota, retorne o index.html
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// Adicione este helper para buscar dados do TrueView
+function findTrueViewData(sceneName) {
+  const trueviewDir = path.join(__dirname, 'input', 'trueview');
+  if (!fs.existsSync(trueviewDir)) return null;
+  
+  try {
+    // Tenta encontrar uma pasta com o mesmo nome
+    const exactMatch = path.join(trueviewDir, sceneName);
+    if (fs.existsSync(exactMatch) && fs.statSync(exactMatch).isDirectory()) {
+      // Procura por arquivos de cubemap
+      const files = fs.readdirSync(exactMatch);
+      const configFile = files.find(f => f.includes('cubemap') && f.endsWith('.json'));
+      
+      if (configFile) {
+        return {
+          config: `/input/trueview/${sceneName}/${configFile}`,
+          folder: `/input/trueview/${sceneName}/`
+        };
+      }
+    }
+    
+    // Se não encontrou match exato, procura por nome parcial
+    const folders = fs.readdirSync(trueviewDir)
+      .filter(f => fs.statSync(path.join(trueviewDir, f)).isDirectory() && 
+               f.toLowerCase().includes(sceneName.toLowerCase()));
+    
+    if (folders.length > 0) {
+      const matchFolder = folders[0];
+      const files = fs.readdirSync(path.join(trueviewDir, matchFolder));
+      const configFile = files.find(f => f.includes('cubemap') && f.endsWith('.json'));
+      
+      if (configFile) {
+        return {
+          config: `/input/trueview/${matchFolder}/${configFile}`,
+          folder: `/input/trueview/${matchFolder}/`
+        };
+      }
+    }
+  } catch (err) {
+    console.error(`Erro ao buscar dados TrueView para ${sceneName}:`, err);
+  }
+  
+  return null;
+}

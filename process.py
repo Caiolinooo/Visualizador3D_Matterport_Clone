@@ -1,258 +1,308 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-process.py - Processa um arquivo .pts para gerar:
-  • Nuvem de pontos;
-  • Mesh simplificado (via Alpha Shape e decimação);
-  • Visão de planta (projeção dos pontos para uma imagem 2D).
-
-Simula uma parte do fluxo de trabalho do Matterport.
+process.py - Processa arquivos PTS para visualização 3D estilo Matterport
+Inclui:
+- Conversão de nuvem de pontos para PLY otimizado
+- Geração de mesh simplificado com precisão para medições
+- Criação de planta baixa
 """
 
 import os
 import sys
 import numpy as np
-from PIL import Image, ImageDraw
 import open3d as o3d
+import pandas as pd
+from PIL import Image, ImageDraw
+import time
+import gc
+import logging
+from tqdm import tqdm
+import multiprocessing
+from pathlib import Path
+import json
 
+# Configurar logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-def load_pts(file_path):
-    """
-    Carrega o arquivo .pts e retorna um array Nx3.
-    Supõe-se que:
-      - A primeira linha seja o número de pontos (opcional)
-      - As demais linhas contenham 'x y z' (mais colunas serão ignoradas)
-    """
+# Diretórios
+INPUT_DIR = Path('input')
+OUTPUT_DIR = Path('output')
+BATCH_SIZE = 1000000  # Processar pontos em lotes para economizar memória
+
+def ensure_dirs():
+    """Garante que os diretórios necessários existam"""
+    dirs = [INPUT_DIR, OUTPUT_DIR]
+    for d in dirs:
+        d.mkdir(exist_ok=True)
+    logger.info(f"Diretórios verificados: {', '.join(str(d) for d in dirs)}")
+
+def load_pts_in_batches(file_path, batch_size=BATCH_SIZE):
+    """Carrega arquivo PTS em lotes para economizar memória"""
+    logger.info(f"Carregando arquivo PTS em lotes: {file_path}")
+    
+    # Primeiro, conta o número total de pontos para informação
+    total_points = 0
     with open(file_path, 'r') as f:
-        lines = [line.strip() for line in f if line.strip() != ""]
-
-    pts = []
-    # Tenta interpretar a primeira linha como número de pontos
-    try:
-        n_points = int(lines[0])
-        data_lines = lines[1:]
-    except ValueError:
-        data_lines = lines
-
-    for line in data_lines:
-        parts = line.split()
-        if len(parts) < 3:
-            continue
-        try:
-            x, y, z = float(parts[0]), float(parts[1]), float(parts[2])
-            pts.append([x, y, z])
-        except ValueError:
-            continue
-
-    data = np.array(pts, dtype=np.float64)
-    return data
-
-
-def compute_center(points):
-    """ Calcula o centro (média) dos pontos. """
-    return np.mean(points, axis=0)
-
-
-def generate_mesh(points, alpha=0.1, target_triangles=1000):
-    """
-    Gera um mesh a partir da nuvem de pontos utilizando Alpha Shape.
-    Em seguida, simplifica o mesh para reduzir a contagem de triângulos.
+        for line in f:
+            if line.strip() and not line.startswith('#'):
+                total_points += 1
     
-    Parâmetros:
-      - points: array Nx3
-      - alpha: parâmetro usado no método de Alpha Shape
-      - target_triangles: número alvo de triângulos após simplificação
-    Retorna:
-      - mesh (open3d.geometry.TriangleMesh)
-    """
+    logger.info(f"Total de pontos: {total_points}")
+    
+    # Agora processa em lotes
+    points_list = []
+    colors_list = []
+    points_processed = 0
+    
+    with open(file_path, 'r') as f:
+        batch_points = []
+        batch_colors = []
+        
+        for i, line in enumerate(tqdm(f, total=total_points, desc="Carregando pontos")):
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+                
+            try:
+                values = line.split()
+                if len(values) >= 6:  # x, y, z, r, g, b (e possivelmente mais)
+                    x, y, z = float(values[0]), float(values[1]), float(values[2])
+                    r, g, b = int(values[3]), int(values[4]), int(values[5])
+                    
+                    batch_points.append([x, y, z])
+                    batch_colors.append([r/255.0, g/255.0, b/255.0])  # Normaliza cores para [0,1]
+                    
+                    if len(batch_points) >= batch_size:
+                        points_list.append(np.array(batch_points))
+                        colors_list.append(np.array(batch_colors))
+                        points_processed += len(batch_points)
+                        logger.info(f"Processados {points_processed}/{total_points} pontos ({points_processed/total_points*100:.1f}%)")
+                        batch_points = []
+                        batch_colors = []
+                        # Força coleta de lixo
+                        gc.collect()
+            except Exception as e:
+                logger.warning(f"Erro ao processar linha {i}: {e}")
+    
+    # Adiciona o último lote se houver pontos restantes
+    if batch_points:
+        points_list.append(np.array(batch_points))
+        colors_list.append(np.array(batch_colors))
+    
+    return points_list, colors_list, total_points
+
+def process_point_cloud(input_file, output_dir, voxel_size=0.05):
+    """Processa nuvem de pontos com otimização de memória"""
+    start_time = time.time()
+    
+    # Cria subdiretório para saída
+    scan_name = os.path.splitext(os.path.basename(input_file))[0]
+    output_subdir = output_dir / scan_name
+    output_subdir.mkdir(exist_ok=True)
+    
+    # Arquivo de saída PLY
+    output_cloud = output_subdir / "output_cloud.ply"
+    output_mesh = output_subdir / "output_mesh.ply"
+    output_floor_plan = output_subdir / "floor_plan.png"
+    
+    # Se já existirem arquivos de saída, pergunta se deseja reprocessar
+    if output_cloud.exists() and output_mesh.exists() and output_floor_plan.exists():
+        logger.info(f"Arquivos de saída já existem para {scan_name}. Pulando processamento.")
+        return
+    
+    logger.info(f"Processando nuvem de pontos: {input_file}")
+    
+    # Carrega pontos em lotes
+    points_batches, colors_batches, total_points = load_pts_in_batches(input_file)
+    
+    # Combina os lotes em uma única nuvem de pontos (isso pode consumir muita memória)
+    logger.info("Combinando lotes em uma única nuvem de pontos...")
+    all_points = np.vstack(points_batches)
+    all_colors = np.vstack(colors_batches)
+    
+    # Libera memória dos lotes
+    points_batches = None
+    colors_batches = None
+    gc.collect()
+    
+    # Cria nuvem de pontos Open3D
+    logger.info("Criando nuvem de pontos Open3D...")
     pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(points)
+    pcd.points = o3d.utility.Vector3dVector(all_points)
+    pcd.colors = o3d.utility.Vector3dVector(all_colors)
     
+    # Calcula o centro da nuvem (importante para posicionamento)
+    center = pcd.get_center()
+    
+    # Salva coordenadas do centro para uso posterior
+    with open(output_subdir / "center_coordinates.txt", "w") as f:
+        f.write(f"center = [{center[0]}, {center[1]}, {center[2]}]\n")
+    
+    # Reduz a nuvem para economizar memória enquanto mantém detalhes suficientes
+    logger.info(f"Downsampling da nuvem (voxel_size={voxel_size})...")
+    pcd_down = pcd.voxel_down_sample(voxel_size=voxel_size)
+    logger.info(f"Pontos originais: {len(pcd.points)}, Após downsampling: {len(pcd_down.points)}")
+    
+    # Libera memória da nuvem original
+    pcd = None
+    all_points = None
+    all_colors = None
+    gc.collect()
+    
+    # Salva nuvem de pontos simplificada
+    logger.info(f"Salvando nuvem de pontos em {output_cloud}...")
+    o3d.io.write_point_cloud(str(output_cloud), pcd_down)
+    
+    # Gera mesh para visualização (Alpha Shape para preservar formato)
+    logger.info("Gerando mesh Alpha Shape...")
     try:
-        mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_alpha_shape(pcd, alpha)
-    except Exception as e:
-        print("Erro ao gerar Alpha Shape:", e)
-        mesh = o3d.geometry.TriangleMesh()
-    
-    mesh.compute_vertex_normals()
-    
-    if len(mesh.triangles) > target_triangles and target_triangles > 0:
+        alpha = 0.1  # Ajuste este valor conforme necessidade
+        mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_alpha_shape(pcd_down, alpha)
+        
+        # Simplifica o mesh para visualização enquanto mantém detalhes suficientes para medição
+        logger.info("Simplificando mesh...")
+        target_triangles = min(500000, len(mesh.triangles))  # Ajuste conforme necessidade
+        reduction_factor = target_triangles / len(mesh.triangles)
         mesh = mesh.simplify_quadric_decimation(target_number_of_triangles=target_triangles)
-        mesh.compute_vertex_normals()
+        
+        # Suaviza mesh para melhor aparência
+        logger.info("Suavizando mesh...")
+        mesh = mesh.filter_smooth_taubin(number_of_iterations=5)
+        
+        # Salva mesh
+        logger.info(f"Salvando mesh em {output_mesh}...")
+        o3d.io.write_triangle_mesh(str(output_mesh), mesh)
+    except Exception as e:
+        logger.error(f"Erro ao gerar mesh: {e}")
     
-    return mesh
+    # Gera planta baixa
+    logger.info("Gerando planta baixa...")
+    try:
+        generate_floor_plan(pcd_down, output_floor_plan)
+    except Exception as e:
+        logger.error(f"Erro ao gerar planta baixa: {e}")
+    
+    elapsed_time = time.time() - start_time
+    logger.info(f"Processamento concluído em {elapsed_time:.2f} segundos")
 
-
-def generate_floor_plan(points, output_path, image_size=(500,500), margin=10):
-    """
-    Gera uma imagem representando a planta baixa.
-    Os pontos são projetados para o plano XZ e mapeados para uma imagem 2D.
+def generate_floor_plan(pcd, output_path, image_size=(800, 800), margin=50):
+    """Gera uma planta baixa a partir da nuvem de pontos"""
+    logger.info("Gerando planta baixa...")
     
-    Parâmetros:
-      - points: array Nx3
-      - output_path: caminho para salvar a imagem (ex.: floor_plan.png)
-      - image_size: tupla (largura, altura)
-      - margin: margem em pixels
-    """
-    # Projeta os pontos para X e Z
-    proj = points[:, [0, 2]]
-    min_vals = np.min(proj, axis=0)
-    max_vals = np.max(proj, axis=0)
+    # Extrai pontos da nuvem
+    points = np.asarray(pcd.points)
     
-    # Calcula escalas
-    scale_x = (image_size[0] - 2*margin) / (max_vals[0] - min_vals[0] + 1e-6)
-    scale_y = (image_size[1] - 2*margin) / (max_vals[1] - min_vals[1] + 1e-6)
+    # Considera apenas pontos próximos ao chão (±1m do ponto mais baixo)
+    min_y = np.min(points[:, 1])
+    floor_points = points[points[:, 1] < min_y + 1.0]
     
-    img = Image.new("RGB", image_size, "white")
+    if len(floor_points) == 0:
+        logger.warning("Nenhum ponto do chão encontrado para gerar planta baixa.")
+        return
+    
+    # Obtém coordenadas X e Z (descarta altura Y)
+    x_coords = floor_points[:, 0]
+    z_coords = floor_points[:, 2]
+    
+    # Determina limites
+    x_min, x_max = np.min(x_coords), np.max(x_coords)
+    z_min, z_max = np.min(z_coords), np.max(z_coords)
+    
+    # Cria imagem
+    img = Image.new('RGB', image_size, color='white')
     draw = ImageDraw.Draw(img)
     
-    for point in proj:
-        x = int(margin + (point[0] - min_vals[0]) * scale_x)
-        y = int(margin + (max_vals[1] - point[1]) * scale_y)  # Inverte eixo Y para a imagem
-        radius = 1
-        draw.ellipse((x-radius, y-radius, x+radius, y+radius), fill="black")
+    # Calcula escala para caber na imagem com margens
+    width = image_size[0] - 2 * margin
+    height = image_size[1] - 2 * margin
     
+    x_scale = width / (x_max - x_min) if x_max > x_min else 1
+    z_scale = height / (z_max - z_min) if z_max > z_min else 1
+    scale = min(x_scale, z_scale)
+    
+    # Desenha pontos do chão
+    for x, z in zip(x_coords, z_coords):
+        px = margin + int((x - x_min) * scale)
+        py = margin + int((z - z_min) * scale)
+        draw.point((px, py), fill='black')
+    
+    # Salva imagem
+    logger.info(f"Salvando planta baixa em {output_path}...")
     img.save(output_path)
-    print(f"Planta baixa salva em {output_path}")
 
+def process_trueview(trueview_dir, output_dir):
+    """Processa dados do TrueView para integração com a nuvem de pontos"""
+    logger.info(f"Processando dados do TrueView: {trueview_dir}")
+    
+    # Verifica se a pasta existe
+    if not os.path.exists(trueview_dir):
+        logger.warning(f"Pasta TrueView não encontrada: {trueview_dir}")
+        return
+    
+    # Lista todas as subpastas (cada uma contém uma cena)
+    scene_folders = [f for f in os.listdir(trueview_dir) 
+                    if os.path.isdir(os.path.join(trueview_dir, f))]
+    
+    for scene_folder in scene_folders:
+        scene_path = os.path.join(trueview_dir, scene_folder)
+        logger.info(f"Processando cena TrueView: {scene_folder}")
+        
+        # Procura pelo arquivo de configuração do cubemap
+        config_files = [f for f in os.listdir(scene_path) 
+                      if 'cubemap' in f and f.endswith('.json')]
+        
+        if not config_files:
+            logger.warning(f"Arquivo de configuração do cubemap não encontrado para {scene_folder}")
+            continue
+        
+        config_file = os.path.join(scene_path, config_files[0])
+        
+        # Lê o arquivo de configuração para extrair coordenadas
+        try:
+            with open(config_file, 'r') as f:
+                config_data = json.loads(f.read())
+            
+            # Extrai coordenadas da câmera
+            if 'camera' in config_data and 'position' in config_data['camera']:
+                position = config_data['camera']['position']
+                center = [position['x'], position['y'], position['z']]
+                
+                # Cria pasta de saída para a cena
+                scene_output = os.path.join(output_dir, scene_folder)
+                os.makedirs(scene_output, exist_ok=True)
+                
+                # Salva coordenadas
+                with open(os.path.join(scene_output, "center_coordinates.txt"), "w") as f:
+                    f.write(f"center = [{center[0]}, {center[1]}, {center[2]}]\n")
+                
+                logger.info(f"Coordenadas extraídas para {scene_folder}: {center}")
+            else:
+                logger.warning(f"Dados de posição não encontrados para {scene_folder}")
+        
+        except Exception as e:
+            logger.error(f"Erro ao processar configuração do TrueView para {scene_folder}: {e}")
 
 def main():
-    # Define diretório base de entrada: se fornecido via argumento e for diretório, usa-o; senão, usa 'input_data'
-    if len(sys.argv) > 1:
-        input_base = sys.argv[1]
-        if not os.path.isdir(input_base):
-            print(f"{input_base} não é um diretório.")
-            sys.exit(1)
-    else:
-        input_base = os.path.join(os.getcwd(), 'input_data')
-
-    scans_dir = os.path.join(input_base, 'scans')
-    panoramas_dir = os.path.join(input_base, 'panoramas')
-    if not os.path.exists(scans_dir):
-        print(f"Pasta de scans não encontrada em: {scans_dir}")
-        sys.exit(1)
-
-    output_base = os.path.join(os.getcwd(), 'output')
-    if not os.path.exists(output_base):
-        os.makedirs(output_base)
-
-    pts_files = [f for f in os.listdir(scans_dir) if f.lower().endswith('.pts')]
+    """Função principal"""
+    ensure_dirs()
+    
+    # Procura por arquivos PTS na pasta de entrada
+    pts_files = list(INPUT_DIR.glob("**/*.pts"))
+    
     if not pts_files:
-        print("Nenhum arquivo .pts encontrado.")
-        sys.exit(1)
-
+        logger.warning(f"Nenhum arquivo PTS encontrado em {INPUT_DIR}")
+        return
+    
+    logger.info(f"Encontrados {len(pts_files)} arquivos PTS")
+    
+    # Processa cada arquivo
     for pts_file in pts_files:
-        scene_name = os.path.splitext(pts_file)[0]
-        print(f"\nProcessando cena: {scene_name}")
-        pts_path = os.path.join(scans_dir, pts_file)
+        process_point_cloud(pts_file, OUTPUT_DIR)
 
-        # Carrega os pontos e aplica downsampling
-        points = load_pts(pts_path)
-        print(f"Pontos carregados: {points.shape[0]}")
-
-        pcd_original = o3d.geometry.PointCloud()
-        pcd_original.points = o3d.utility.Vector3dVector(points)
-        voxel_size = 0.5  # ajustável conforme necessário
-        down_pcd = pcd_original.voxel_down_sample(voxel_size)
-        points = np.asarray(down_pcd.points)
-        print(f"Pontos após downsampling: {points.shape[0]}")
-
-        # Calcula o centro
-        center = compute_center(points)
-        print(f"Centro: {center}")
-
-        # Cria pasta de saída para a cena
-        scene_output = os.path.join(output_base, scene_name)
-        if not os.path.exists(scene_output):
-            os.makedirs(scene_output)
-
-        # Gera o mesh simplificado
-        mesh = generate_mesh(points, alpha=0.1, target_triangles=1000)
-        mesh_output = os.path.join(scene_output, 'output_mesh.ply')
-        o3d.io.write_triangle_mesh(mesh_output, mesh)
-        print(f"Mesh salvo em {mesh_output}")
-
-        # Gera a planta baixa
-        floor_plan_output = os.path.join(scene_output, 'floor_plan.png')
-        generate_floor_plan(points, floor_plan_output, image_size=(500,500), margin=10)
-
-        # Salva a nuvem de pontos
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(points)
-        cloud_output = os.path.join(scene_output, 'output_cloud.ply')
-        o3d.io.write_point_cloud(cloud_output, pcd)
-        print(f"Nuvem de pontos salva em {cloud_output}")
-
-        # Salva as coordenadas do centro
-        coord_output = os.path.join(scene_output, 'center_coordinates.txt')
-        with open(coord_output, 'w') as f:
-            f.write(f"Centro: {center.tolist()}\n")
-        print(f"Coordenadas do centro salvas em {coord_output}")
-
-        # Verifica e copia arquivo de panorama, se existir
-        if os.path.exists(panoramas_dir):
-            for ext in ['.jpg', '.jpeg', '.png']:
-                pano_file = scene_name + ext
-                pano_path = os.path.join(panoramas_dir, pano_file)
-                if os.path.exists(pano_path):
-                    import shutil
-                    dest_path = os.path.join(scene_output, pano_file)
-                    shutil.copy2(pano_path, dest_path)
-                    print(f"Panorama {pano_file} copiado para {scene_output}")
-                    break
-
-        # Copia o arquivo .pts original para a pasta de saída
-        import shutil
-        dest_pts = os.path.join(scene_output, pts_file)
-        shutil.copy2(pts_path, dest_pts)
-        print(f"Arquivo .pts {pts_file} copiado para {scene_output}")
-
-    # Após processar todas as cenas, gerar sumário dos resultados para integração com front end
-    summary = {}
-    for scene in os.listdir(output_base):
-        scene_path = os.path.join(output_base, scene)
-        if os.path.isdir(scene_path):
-            files = os.listdir(scene_path)
-            summary[scene] = files
-    import json
-    summary_path = os.path.join(output_base, 'summary.json')
-    with open(summary_path, 'w') as f:
-        json.dump(summary, f, indent=4)
-    print(f"Summary JSON salvo em {summary_path}")
-
-
-# Função para processar dados de nuvem de pontos
-def process_point_cloud(data):
-    # ...
-    # Implementação do downsampling
-    downsampled_data = downsample(data)
-    # ...
-    return downsampled_data
-
-# Função para adicionar círculos de navegação
-def add_navigation_circles():
-    """Adiciona círculos de navegação à interface do usuário."""
-    # Implementação para adicionar círculos de navegação
-    print("Adicionando círculos de navegação...")
-    # Lógica para desenhar círculos
-
-# Função para melhorar a interface do usuário
-def enhance_ui():
-    # Exemplo de implementação simples
-    print("Melhorando a interface do usuário...")
-    # Adicionando eixos e grade
-    add_axes()
-    add_grid()
-    # ...
-
-
-def downsample(data, voxel_size=0.5):
-    """Aplica downsampling à nuvem de pontos usando voxel grid."""
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(data)
-    downsampled_pcd = pcd.voxel_down_sample(voxel_size)
-    return np.asarray(downsampled_pcd.points)
-
-
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        logger.error(f"Erro: {e}", exc_info=True)

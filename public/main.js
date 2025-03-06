@@ -10,8 +10,8 @@
  * - Tour automático
  */
 
-import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+// Remova as importações ES6 que estão causando problemas
+// Agora THREE, OrbitControls e PLYLoader estão disponíveis globalmente através das tags script
 
 (function() {
   // Variáveis globais
@@ -31,6 +31,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
   let raycaster = new THREE.Raycaster();
   let mouse = new THREE.Vector2();
   let hoverState = { mesh: null };
+  let savedCameraPosition;
+  let currentSceneData;
   
   // Elementos DOM
   const loadingOverlay = document.getElementById('loading-overlay');
@@ -38,8 +40,13 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
   const measureInfoElement = document.getElementById('measure-info');
   const floorPlanElement = document.getElementById('floor-plan');
   
+  // IMPORTANTE: Adicionar chamada da função init() quando o DOM estiver pronto
+  document.addEventListener('DOMContentLoaded', init);
+  
   // Inicialização
   function init() {
+    monitorRequests();
+    
     setupScene();
     setupCamera();
     setupRenderer();
@@ -53,13 +60,47 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
     
     // Carrega as cenas disponíveis
     loadScenes();
+
+    console.log('Função init() foi executada');
+  }
+  
+  // Adicione esta função para monitorar requisições e erros
+  function monitorRequests() {
+    const originalFetch = window.fetch;
+    
+    window.fetch = function(url, options) {
+      console.log(`🔄 Requisição: ${url}`);
+      return originalFetch(url, options)
+        .then(response => {
+          console.log(`✅ Resposta de ${url}: ${response.status} ${response.statusText}`);
+          return response;
+        })
+        .catch(error => {
+          console.error(`❌ Erro em ${url}:`, error);
+          throw error;
+        });
+    };
+    
+    // Monitora carregamento de imagens
+    const originalImageSrc = Object.getOwnPropertyDescriptor(Image.prototype, 'src').set;
+    
+    Object.defineProperty(Image.prototype, 'src', {
+      set: function(value) {
+        console.log(`🖼️ Carregando imagem: ${value}`);
+        this.addEventListener('load', () => console.log(`✅ Imagem carregada: ${value}`));
+        this.addEventListener('error', (e) => console.error(`❌ Erro ao carregar imagem: ${value}`, e));
+        return originalImageSrc.call(this, value);
+      }
+    });
   }
   
   // Configuração da cena Three.js
   function setupScene() {
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x000000);
-    scene.fog = new THREE.FogExp2(0x000000, 0.002);
+    
+    // Remove a neblina que pode causar cálculos extra desnecessários
+    // scene.fog = new THREE.FogExp2(0x000000, 0.002);
   }
   
   // Configuração da câmera
@@ -88,62 +129,108 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
   
   // Configuração dos controles OrbitControls
   function setupControls() {
-    controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.05;
-    controls.screenSpacePanning = false;
-    controls.minDistance = 1;
-    controls.maxDistance = 50;
-    controls.maxPolarAngle = Math.PI;
-    controls.enablePan = true;
+    controls = new THREE.OrbitControls(camera, renderer.domElement);
     
-    // Não permite zoom com o scroll do mouse (apenas com pinch)
+    // Configurações para imitar Matterport
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.1;
+    controls.rotateSpeed = 0.5;
+    
+    // Limita o movimento vertical
+    controls.minPolarAngle = Math.PI * 0.1;  // 18 graus acima da horizontal
+    controls.maxPolarAngle = Math.PI * 0.9;  // 18 graus abaixo da horizontal
+    
+    // Desativa pan para ficar no mesmo lugar como no Matterport
+    controls.enablePan = false;
+    
+    // Limita zoom (mas mantém habilitado)
     controls.enableZoom = true;
-    controls.zoomSpeed = 1.0;
+    controls.zoomSpeed = 0.7;
+    controls.minDistance = 0.1;
+    controls.maxDistance = 5;
+    
+    // Sempre mantém a câmera na mesma altura (altura dos olhos)
+    const originalUpdate = controls.update;
+    controls.update = function() {
+      originalUpdate.call(this);
+      
+      if (!isDollhouseMode) {
+        // Mantém a altura da câmera igual à altura dos olhos
+        const floorLevel = detectFloorLevel();
+        camera.position.y = floorLevel + 1.6; // 1.6m = altura média dos olhos
+      }
+    };
     
     // Posição inicial
+    camera.position.set(0, 1.6, 0);
     controls.target.set(0, 1.6, -1);
     controls.update();
   }
   
   // Configuração de event listeners
   function setupEventListeners() {
-    window.addEventListener('resize', onWindowResize, false);
-    renderer.domElement.addEventListener('click', onDocumentClick, false);
-    renderer.domElement.addEventListener('mousemove', onDocumentMouseMove, false);
+    // Redimensionamento da janela
+    window.addEventListener('resize', onWindowResize);
     
-    // Se clicar no botão escape, sai do modo atual (medição, tags)
-    window.addEventListener('keydown', function(event) {
-      if (event.key === 'Escape') {
-        isMeasuring = false;
-        isTagMode = false;
-        updateUIState();
+    // Mouse e toque para medição e tags
+    renderer.domElement.addEventListener('click', function(event) {
+      if (isMeasuring) {
+        handleMeasurementClick(event);
+      } else if (isTagMode) {
+        handleTagClick(event);
+      } else {
+        handleNavPointClick(event);
       }
     });
+    
+    // Mouse move para hover - use onDocumentMouseMove em vez de onMouseMove
+    renderer.domElement.addEventListener('mousemove', onDocumentMouseMove);
+    
+    // Teclas para atalhos
+    document.addEventListener('keydown', onKeyDown);
+    
+    console.log('Event listeners configurados');
   }
   
   // Configuração da interface
   function setupUI() {
-    // Botões da interface
-    document.getElementById('btn-dollhouse').addEventListener('click', toggleDollhouseView);
+    // Conecta os botões da interface
+    document.getElementById('btn-dollhouse').addEventListener('click', toggleDollhouseMode);
     document.getElementById('btn-floorplan').addEventListener('click', toggleFloorPlan);
     document.getElementById('btn-measure').addEventListener('click', toggleMeasureMode);
     document.getElementById('btn-tags').addEventListener('click', toggleTagMode);
     document.getElementById('btn-tour').addEventListener('click', toggleAutoTour);
+    document.getElementById('btn-reset').addEventListener('click', resetView);
     
     // Atualizando estado inicial da UI
     updateUIState();
+    
+    console.log('UI inicializada, botões conectados');
   }
   
   // Loop de animação
   function animate() {
     requestAnimationFrame(animate);
     
+    // Limitação de framerate para economizar recursos
+    const now = Date.now();
+    if (now - lastFrameTime < 16) { // Aproximadamente 60 FPS
+      return;
+    }
+    lastFrameTime = now;
+    
+    // Atualiza os controles
     controls.update();
     
-    // Atualiza posição de qualquer elemento dependente da câmera (labels, etc)
-    updateLabelsPosition();
+    // Faz raycasting apenas quando necessário (hover, medição, etc)
+    // em vez de a cada frame
+    if (isMeasuring || isTagMode || hovering) {
+      raycaster.setFromCamera(mouse, camera);
+      const intersects = raycaster.intersectObjects(scene.children, true);
+      processIntersections(intersects);
+    }
     
+    // Renderiza a cena
     renderer.render(scene, camera);
   }
   
@@ -160,28 +247,51 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
   
   // Carrega a lista de cenas disponíveis a partir da API
   function loadScenes() {
+    console.log('Tentando carregar cenas...');
     showLoading(true);
+    
+    infoElement.textContent = 'Carregando lista de cenas...';
     
     fetch('/api/matterport')
       .then(response => {
-        if (!response.ok) throw new Error('Erro ao carregar cenas');
+        console.log(`Resposta da API: ${response.status} ${response.statusText}`);
+        if (!response.ok) {
+          throw new Error(`Erro ${response.status}: ${response.statusText}`);
+        }
         return response.json();
       })
       .then(data => {
+        console.log('Dados recebidos:', data);
+        
+        if (!data || data.length === 0) {
+          console.warn('Nenhuma cena encontrada');
+          showMessage('Nenhuma cena disponível. Use o botão "Escolher Nuvem" para carregar uma cena.');
+          
+          // Em vez de criar uma demo, apenas mostra tela vazia com instruções
+          showEmptySceneMessage();
+          showLoading(false);
+          return;
+        }
+        
+        // Guarda referência às cenas
         scenes = data;
+        
+        // Popula o menu de cenas
         populateScenesMenu(scenes);
         
-        if (scenes.length > 0) {
-          loadScene(scenes[0]);
-        } else {
-          showLoading(false);
-          showMessage('Nenhuma cena disponível');
-        }
+        // Carrega a primeira cena
+        const firstScene = scenes[0];
+        console.log('Carregando primeira cena:', firstScene);
+        loadScene(firstScene);
+        currentSceneIndex = 0;
       })
       .catch(error => {
-        console.error('Erro:', error);
+        console.error('Erro ao carregar cenas:', error);
+        showMessage('Erro ao carregar cenas. Tente novamente mais tarde.');
+        
+        // Em vez de criar demo, mostrar mensagem de erro e interface para upload
+        showErrorMessage();
         showLoading(false);
-        showMessage('Erro ao carregar cenas: ' + error.message);
       });
   }
   
@@ -209,39 +319,100 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
   
   // Carrega uma cena específica
   function loadScene(sceneData) {
+    console.log('Carregando cena Matterport-style:', sceneData);
     showLoading(true);
     
-    // Limpa cena atual
+    // Guarda referência à cena atual
+    currentSceneData = sceneData;
+    
+    // Limpa a cena atual
     clearScene();
     
-    // Restaura configurações padrão
-    resetModes();
-    
-    // Informa qual cena está sendo carregada
-    showMessage(`Carregando cena: ${sceneData.name}`);
-    
-    // Carrega a panorâmica
-    if (sceneData.files && sceneData.files.panorama) {
-      loadPanorama(Array.isArray(sceneData.files.panorama) 
-        ? sceneData.files.panorama[0] 
-        : sceneData.files.panorama);
+    // Mostra status da cena
+    if (sceneData.status === 'pending') {
+      showMessage(sceneData.message || 'Esta cena ainda não foi processada');
+      showLoading(false);
+      return;
     }
     
-    // Carrega a nuvem de pontos
-    if (sceneData.files && sceneData.files.cloud) {
-      loadPointCloud(sceneData.files.cloud);
+    // Funções para carregar componentes da cena
+    const toLoad = {
+      panorama: (sceneData.files.panorama !== undefined || sceneData.files.cubemap !== undefined),
+      cloud: sceneData.files.cloud !== undefined,
+      floorPlan: sceneData.files.floor_plan !== undefined
+    };
+    
+    // Contador para controlar quando todos os componentes foram carregados
+    let loadedCount = 0;
+    const totalToLoad = Object.values(toLoad).filter(v => v).length;
+    
+    // Função para verificar se tudo foi carregado
+    function checkAllLoaded() {
+      loadedCount++;
+      console.log(`Item carregado (${loadedCount}/${totalToLoad})`);
+      
+      if (loadedCount >= totalToLoad) {
+        showLoading(false);
+        
+        // Detecta o nível do piso
+        const floorLevel = detectFloorLevel();
+        
+        // Configura a câmera na posição de uma pessoa
+        if (sceneData.center) {
+          const center = sceneData.center;
+          // Posiciona a câmera na altura dos olhos relativa ao nível do piso
+          controls.target.set(center[0], floorLevel + 1.6, center[2] - 1); // Olha para frente
+          camera.position.set(center[0], floorLevel + 1.6, center[2]); // Altura dos olhos
+          controls.update();
+        }
+        
+        // Cria pontos de navegação
+        createNavigationPoints();
+        
+        // Prioriza a visualização da panorâmica
+        if (panoramaSphere) {
+          panoramaSphere.visible = true;
+          // Posiciona a panorâmica na altura correta (nível do piso + altura dos olhos)
+          if (sceneData.center) {
+            panoramaSphere.position.set(
+              sceneData.center[0],
+              floorLevel + 1.6,
+              sceneData.center[2]
+            );
+          }
+        }
+        
+        if (currentPointCloud) {
+          currentPointCloud.visible = isDollhouseMode; // Só mostra se estiver em modo dollhouse
+        }
+        
+        // Atualiza interface
+        infoElement.textContent = `Cena: ${sceneData.name}`;
+      }
     }
     
-    // Carrega a planta baixa
-    if (sceneData.files && sceneData.files.floor_plan) {
-      loadFloorPlan(sceneData.files.floor_plan);
+    // Carrega panorama primeiro (equiretangular ou cubemap)
+    if (toLoad.panorama) {
+      const panoramaData = sceneData.files.panorama || sceneData.files.cubemap;
+      loadPanorama(panoramaData, checkAllLoaded);
     }
     
-    // Adiciona pontos de navegação entre cenas
-    addNavigationPoints();
+    // Depois carrega nuvem de pontos
+    if (toLoad.cloud) {
+      loadPointCloud(sceneData.files.cloud, checkAllLoaded);
+    }
     
-    // Posiciona a câmera na cena
-    positionCameraInScene(sceneData);
+    // Por fim carrega planta baixa
+    if (toLoad.floorPlan) {
+      loadFloorPlan(sceneData.files.floor_plan, checkAllLoaded);
+    }
+    
+    // Se não há nada para carregar, mostra um modelo básico
+    if (totalToLoad === 0) {
+      createBasicModel();
+      showLoading(false);
+      showMessage('Nenhum dado disponível para esta cena');
+    }
   }
   
   // Limpa a cena atual
@@ -275,124 +446,549 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
     updateUIState();
   }
   
-  // Carrega uma panorâmica
-  function loadPanorama(panoramaUrl) {
-    if (!panoramaUrl) {
-      console.warn('URL de panorâmica não fornecida');
+  // Função para carregar panorâmicas (tanto equiretangulares quanto cubemaps)
+  function loadPanorama(panoramaData, callback) {
+    if (!panoramaData) {
+      console.warn('Dados de panorama não fornecidos');
+      if (callback) callback();
       return;
     }
     
+    console.log('Carregando panorama:', panoramaData);
+    
+    // Remove panorama anterior
+    if (panoramaSphere) {
+      scene.remove(panoramaSphere);
+      panoramaSphere.geometry.dispose();
+      if (panoramaSphere.material) {
+        if (Array.isArray(panoramaSphere.material)) {
+          panoramaSphere.material.forEach(m => m.dispose());
+        } else {
+          panoramaSphere.material.dispose();
+        }
+      }
+      panoramaSphere = null;
+    }
+
+    // Garantir que a nuvem de pontos não esteja visível quando estiver no modo imersivo
+    if (currentPointCloud && !isDollhouseMode) {
+      currentPointCloud.visible = false;
+      console.log('Nuvem de pontos ocultada para modo imersivo');
+    }
+    
+    // Trata cubemap do TrueView
+    if (typeof panoramaData === 'object' && panoramaData.config) {
+      console.log('Carregando cubemap do TrueView:', panoramaData.config);
+      loadTrueViewPanorama(panoramaData, callback);
+      return;
+    }
+    
+    // Carrega panorâmica equiretangular
     const textureLoader = new THREE.TextureLoader();
     textureLoader.load(
-      panoramaUrl,
-      // Sucesso
+      panoramaData,
       function(texture) {
-        // Cria uma esfera para a panorâmica
-        const geometry = new THREE.SphereGeometry(90, 64, 32);
-        geometry.scale(-1, 1, 1); // Inverte a geometria para que a textura fique do lado interno
+        // Cria esfera grande para a panorâmica
+        const geometry = new THREE.SphereGeometry(50, 64, 64);
+        // Inverte a geometria para ver de dentro
+        geometry.scale(-1, 1, 1);
+        
+        // Material com maior prioridade de renderização
+        const material = new THREE.MeshBasicMaterial({
+          map: texture,
+          side: THREE.BackSide,
+          depthWrite: false,
+          depthTest: false
+        });
+        
+        // Cria a esfera da panorâmica
+        panoramaSphere = new THREE.Mesh(geometry, material);
+        panoramaSphere.name = 'panorama';
+        panoramaSphere.renderOrder = -1; // Renderiza antes de tudo
+        
+        // Posiciona no centro correto
+        if (currentSceneData && currentSceneData.center) {
+          const floorLevel = detectFloorLevel();
+          panoramaSphere.position.set(
+            currentSceneData.center[0],
+            floorLevel + 1.6, // Altura dos olhos
+            currentSceneData.center[2]
+          );
+        }
+        
+        scene.add(panoramaSphere);
+        showMessage('Panorama carregado');
+        
+        if (callback) callback();
+      },
+      function(xhr) {
+        const percent = Math.round((xhr.loaded / xhr.total) * 100);
+        showMessage(`Carregando panorama... ${percent}%`);
+      },
+      function(error) {
+        console.error('Erro ao carregar panorama:', error);
+        showMessage('Erro ao carregar panorama. Tentando alternativa...');
+        
+        // Tenta usar imagem demo como fallback
+        loadFallbackPanorama(callback);
+      }
+    );
+  }
+  
+  // Nova função para carregar panorâmicas do TrueView
+  function loadTrueViewPanorama(trueViewData, callback) {
+    // Primeiro, carregamos o arquivo de metadados (cubemapmeta)
+    fetch(trueViewData.config)
+      .then(response => {
+        if (!response.ok) {
+          throw new Error(`Erro ao carregar configuração: ${response.status}`);
+        }
+        return response.json();
+      })
+      .then(config => {
+        console.log('Config TrueView carregado:', config);
+        
+        // Obter caminhos para as imagens do cubemap
+        const baseFolder = trueViewData.folder;
+        const imageFiles = {
+          px: baseFolder + 'cubemap_right.jpg',
+          nx: baseFolder + 'cubemap_left.jpg',
+          py: baseFolder + 'cubemap_top.jpg',
+          ny: baseFolder + 'cubemap_bottom.jpg',
+          pz: baseFolder + 'cubemap_front.jpg',
+          nz: baseFolder + 'cubemap_back.jpg'
+        };
+        
+        // Obter posição da câmera, se disponível
+        let cameraPosition = null;
+        if (config.camera && config.camera.position) {
+          cameraPosition = [
+            config.camera.position.x,
+            config.camera.position.y,
+            config.camera.position.z
+          ];
+          console.log('Posição da câmera TrueView:', cameraPosition);
+        }
+        
+        // Carrega as texturas como cubemap
+        const loader = new THREE.CubeTextureLoader();
+        loader.setPath('');  // URLs já incluem o caminho completo
+        
+        loader.load([
+          imageFiles.px, imageFiles.nx,
+          imageFiles.py, imageFiles.ny,
+          imageFiles.pz, imageFiles.nz
+        ],
+        function(cubeTexture) {
+          // Cria geometria para a panorâmica
+          const geometry = new THREE.SphereGeometry(50, 64, 64);
+          geometry.scale(-1, 1, 1);  // Inverte para ver de dentro
+          
+          // Cria material para o cubemap
+          const material = new THREE.MeshBasicMaterial({
+            envMap: cubeTexture,
+            side: THREE.BackSide,
+            depthWrite: false,
+            depthTest: false
+          });
+          
+          // Cria a esfera
+          panoramaSphere = new THREE.Mesh(geometry, material);
+          panoramaSphere.name = 'panorama_cubemap';
+          panoramaSphere.renderOrder = -1;
+          
+          // Posiciona no centro (use coordenadas do TrueView se disponíveis)
+          if (cameraPosition) {
+            panoramaSphere.position.set(...cameraPosition);
+          } else if (currentSceneData && currentSceneData.center) {
+            const floorLevel = detectFloorLevel();
+            panoramaSphere.position.set(
+              currentSceneData.center[0],
+              floorLevel + 1.6,
+              currentSceneData.center[2]
+            );
+          }
+          
+          scene.add(panoramaSphere);
+          showMessage('Panorama TrueView carregado');
+          
+          if (callback) callback();
+        },
+        function(xhr) {
+          const percent = Math.round((xhr.loaded / xhr.total) * 100);
+          showMessage(`Carregando cubemap... ${percent}%`);
+        },
+        function(error) {
+          console.error('Erro ao carregar cubemap:', error);
+          showMessage('Erro ao carregar cubemap. Tentando alternativa...');
+          loadFallbackPanorama(callback);
+        });
+      })
+      .catch(error => {
+        console.error('Erro ao processar dados do TrueView:', error);
+        loadFallbackPanorama(callback);
+      });
+  }
+  
+  // Função para carregar uma panorâmica de fallback
+  function loadFallbackPanorama(callback) {
+    const demoUrl = '/demo_panorama.jpg';
+    
+    const textureLoader = new THREE.TextureLoader();
+    textureLoader.load(
+      demoUrl,
+      function(texture) {
+        const geometry = new THREE.SphereGeometry(50, 64, 64);
+        geometry.scale(-1, 1, 1);
         
         const material = new THREE.MeshBasicMaterial({
           map: texture,
-          side: THREE.BackSide // Renderiza o lado interno da esfera
+          side: THREE.BackSide,
+          depthWrite: false,
+          depthTest: false
         });
         
-        // Remove panorâmica anterior se existir
-        if (panoramaSphere) {
-          scene.remove(panoramaSphere);
-        }
-        
         panoramaSphere = new THREE.Mesh(geometry, material);
-        panoramaSphere.name = 'panorama';
-        scene.add(panoramaSphere);
+        panoramaSphere.name = 'panorama_demo';
+        panoramaSphere.renderOrder = -1;
         
-        showMessage('Panorâmica carregada');
+        scene.add(panoramaSphere);
+        showMessage('Panorama demo carregado');
+        
+        if (callback) callback();
       },
-      // Progresso
-      function(xhr) {
-        const percent = Math.round((xhr.loaded / xhr.total) * 100);
-        showMessage(`Carregando panorâmica... ${percent}%`);
-      },
-      // Erro
+      undefined,
       function(error) {
-        console.error('Erro ao carregar panorâmica:', error);
-        showMessage('Erro ao carregar panorâmica');
+        console.error('Erro ao carregar panorama demo:', error);
+        if (callback) callback();
       }
     );
   }
   
   // Carrega nuvem de pontos (formato PLY)
-  function loadPointCloud(cloudUrl) {
+  function loadPointCloud(cloudUrl, callback) {
     if (!cloudUrl) {
       console.warn('URL de nuvem de pontos não fornecida');
+      if (callback) callback();
       return;
     }
+    
+    console.log('Carregando nuvem de pontos:', cloudUrl);
     
     const plyLoader = new THREE.PLYLoader();
     plyLoader.load(
       cloudUrl,
-      // Sucesso
       function(geometry) {
-        geometry.computeVertexNormals();
-        
-        // Cria material para os pontos
-        const material = new THREE.PointsMaterial({
-          color: 0xFFFFFF,
-          size: 0.05,
-          sizeAttenuation: true,
-          vertexColors: true,
-          transparent: true,
-          opacity: 0.7
-        });
-        
-        // Remove nuvem de pontos anterior se existir
+        // Remove nuvem anterior
         if (currentPointCloud) {
           scene.remove(currentPointCloud);
+          currentPointCloud.geometry.dispose();
+          if (Array.isArray(currentPointCloud.material)) {
+            currentPointCloud.material.forEach(m => m.dispose());
+          } else if (currentPointCloud.material) {
+            currentPointCloud.material.dispose();
+          }
         }
         
-        // Cria a nuvem de pontos
-        currentPointCloud = new THREE.Points(geometry, material);
-        currentPointCloud.name = 'pointcloud';
+        // Corrige orientação
+        geometry.rotateY(Math.PI);
+        
+        // Otimize a geometria
+        geometry.computeBoundingSphere();
+        
+        // Use um tamanho menor de ponto para melhor performance
+        const pointMaterial = new THREE.PointsMaterial({
+          size: 0.01,
+          vertexColors: true,
+          sizeAttenuation: true,
+          transparent: true,
+          opacity: 0.8
+        });
+        
+        // Nova estratégia: Crie uma versão downsampled para melhor performance
+        const simplifiedGeometry = downsampleGeometry(geometry, 0.5); // 50% dos pontos
+        
+        currentPointCloud = new THREE.Points(simplifiedGeometry, pointMaterial);
+        currentPointCloud.name = 'point_cloud';
+        currentPointCloud.visible = isDollhouseMode;
+        
         scene.add(currentPointCloud);
         
+        // Detecta nível do piso
+        const floorLevel = detectFloorLevel();
+        console.log('Piso detectado em:', floorLevel);
+        
         showMessage('Nuvem de pontos carregada');
-        showLoading(false);
+        if (callback) callback();
       },
-      // Progresso
       function(xhr) {
         const percent = Math.round((xhr.loaded / xhr.total) * 100);
         showMessage(`Carregando nuvem de pontos... ${percent}%`);
       },
-      // Erro
       function(error) {
         console.error('Erro ao carregar nuvem de pontos:', error);
-        showMessage('Erro ao carregar nuvem de pontos');
-        showLoading(false);
+        if (callback) callback();
       }
     );
   }
   
-  // Carrega a planta baixa
-  function loadFloorPlan(floorPlanUrl) {
+  // Nova função para reduzir a quantidade de pontos na nuvem
+  function downsampleGeometry(geometry, ratio) {
+    // Se a razão for 1 ou não houver posições, retorne a original
+    if (ratio >= 1 || !geometry.attributes.position) return geometry;
+    
+    // Obtenha os atributos originais
+    const positions = geometry.attributes.position;
+    const colors = geometry.attributes.color;
+    const vertexCount = positions.count;
+    
+    // Calcule quantos vértices manter
+    const keepCount = Math.max(100, Math.floor(vertexCount * ratio));
+    
+    // Crie novos buffers para os atributos
+    const newPositions = new Float32Array(keepCount * 3);
+    const newColors = colors ? new Float32Array(keepCount * 3) : null;
+    
+    // Amostragem estratificada - escolhe pontos em intervalos regulares
+    const stride = Math.floor(vertexCount / keepCount);
+    
+    for (let i = 0; i < keepCount; i++) {
+      const srcIdx = Math.min(i * stride, vertexCount - 1);
+      
+      // Copie a posição
+      newPositions[i * 3] = positions.array[srcIdx * 3];
+      newPositions[i * 3 + 1] = positions.array[srcIdx * 3 + 1];
+      newPositions[i * 3 + 2] = positions.array[srcIdx * 3 + 2];
+      
+      // Copie a cor, se existir
+      if (newColors && colors) {
+        newColors[i * 3] = colors.array[srcIdx * 3];
+        newColors[i * 3 + 1] = colors.array[srcIdx * 3 + 1];
+        newColors[i * 3 + 2] = colors.array[srcIdx * 3 + 2];
+      }
+    }
+    
+    // Crie uma nova geometria
+    const newGeometry = new THREE.BufferGeometry();
+    newGeometry.setAttribute('position', new THREE.BufferAttribute(newPositions, 3));
+    
+    if (newColors) {
+      newGeometry.setAttribute('color', new THREE.BufferAttribute(newColors, 3));
+    }
+    
+    console.log(`Reduzido de ${vertexCount} para ${keepCount} pontos (${Math.round(ratio * 100)}%)`);
+    
+    return newGeometry;
+  }
+  
+  // Função para criar um modelo 3D básico
+  function createBasicModel() {
+    // Remove nuvem de pontos anterior se existir
+    if (currentPointCloud) {
+      scene.remove(currentPointCloud);
+    }
+    
+    // Cria um modelo 3D básico (uma sala simples)
+    const roomGroup = new THREE.Group();
+    roomGroup.name = 'basic_model';
+    
+    // Piso
+    const floorGeometry = new THREE.PlaneGeometry(10, 10);
+    const floorMaterial = new THREE.MeshStandardMaterial({ color: 0xCCCCCC });
+    const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = 0;
+    roomGroup.add(floor);
+    
+    // Paredes
+    const wallMaterial = new THREE.MeshStandardMaterial({ color: 0xFFFFFF });
+    
+    // Parede 1
+    const wall1Geometry = new THREE.PlaneGeometry(10, 3);
+    const wall1 = new THREE.Mesh(wall1Geometry, wallMaterial);
+    wall1.position.z = -5;
+    wall1.position.y = 1.5;
+    roomGroup.add(wall1);
+    
+    // Parede 2
+    const wall2Geometry = new THREE.PlaneGeometry(10, 3);
+    const wall2 = new THREE.Mesh(wall2Geometry, wallMaterial);
+    wall2.position.z = 5;
+    wall2.position.y = 1.5;
+    wall2.rotation.y = Math.PI;
+    roomGroup.add(wall2);
+    
+    // Parede 3
+    const wall3Geometry = new THREE.PlaneGeometry(10, 3);
+    const wall3 = new THREE.Mesh(wall3Geometry, wallMaterial);
+    wall3.position.x = -5;
+    wall3.position.y = 1.5;
+    wall3.rotation.y = Math.PI / 2;
+    roomGroup.add(wall3);
+    
+    // Parede 4
+    const wall4Geometry = new THREE.PlaneGeometry(10, 3);
+    const wall4 = new THREE.Mesh(wall4Geometry, wallMaterial);
+    wall4.position.x = 5;
+    wall4.position.y = 1.5;
+    wall4.rotation.y = -Math.PI / 2;
+    roomGroup.add(wall4);
+    
+    // Adiciona à cena
+    scene.add(roomGroup);
+    currentPointCloud = roomGroup;
+    
+    showMessage('Modelo 3D básico criado (dados reais não encontrados)');
+  }
+  
+  // Função melhorada para carregar e exibir a planta baixa
+  function loadFloorPlan(floorPlanUrl, callback) {
     if (!floorPlanUrl) {
-      console.warn('URL de planta baixa não fornecida');
+      console.warn('URL da planta baixa não fornecida');
+      if (callback) callback();
       return;
     }
     
-    // Carrega a imagem da planta baixa e a armazena para exibição posterior
-    const floorPlanImg = new Image();
-    floorPlanImg.onload = function() {
+    console.log('Carregando planta baixa:', floorPlanUrl);
+    
+    const img = new Image();
+    img.onload = function() {
       floorPlanElement.innerHTML = '';
-      floorPlanElement.appendChild(floorPlanImg);
-      floorPlanImg.style.width = '100%';
-      floorPlanImg.style.height = '100%';
-      floorPlanImg.style.objectFit = 'contain';
+      floorPlanElement.appendChild(img);
+      
+      // Cria um botão de ampliação da planta
+      const expandBtn = document.createElement('button');
+      expandBtn.className = 'expand-floor-plan-btn';
+      expandBtn.innerHTML = '🔍';
+      expandBtn.title = 'Ampliar planta baixa';
+      floorPlanElement.appendChild(expandBtn);
+      
+      // Adiciona evento para ampliar a planta
+      expandBtn.addEventListener('click', function() {
+        toggleExpandedFloorPlan(floorPlanUrl);
+      });
+      
+      showMessage('Planta baixa carregada');
+      if (callback) callback();
     };
     
-    floorPlanImg.onerror = function() {
-      console.error('Erro ao carregar imagem da planta baixa');
+    img.onerror = function() {
+      console.error('Erro ao carregar planta baixa:', floorPlanUrl);
+      if (callback) callback();
     };
     
-    floorPlanImg.src = floorPlanUrl;
+    img.src = floorPlanUrl;
+  }
+  
+  // Nova função para mostrar a planta baixa ampliada com navegação
+  function toggleExpandedFloorPlan(floorPlanUrl) {
+    // Remove diálogo existente se houver
+    const existingDialog = document.getElementById('expanded-floor-plan');
+    if (existingDialog) {
+      document.body.removeChild(existingDialog);
+      return;
+    }
+    
+    // Cria o diálogo modal
+    const dialog = document.createElement('div');
+    dialog.id = 'expanded-floor-plan';
+    dialog.className = 'expanded-floor-plan';
+    
+    // Adiciona o conteúdo
+    dialog.innerHTML = `
+      <div class="expanded-floor-plan-header">
+        <h3>Planta Baixa</h3>
+        <button class="close-btn">×</button>
+      </div>
+      <div class="expanded-floor-plan-content">
+        <img src="${floorPlanUrl}" alt="Planta Baixa" />
+        <div class="navigation-points"></div>
+      </div>
+      <div class="expanded-floor-plan-footer">
+        Clique em um ponto na planta para navegar até ele
+      </div>
+    `;
+    
+    document.body.appendChild(dialog);
+    
+    // Adiciona evento para fechar
+    dialog.querySelector('.close-btn').addEventListener('click', function() {
+      document.body.removeChild(dialog);
+    });
+    
+    // Adiciona os pontos de navegação na planta
+    const imgContainer = dialog.querySelector('.expanded-floor-plan-content');
+    const img = dialog.querySelector('img');
+    const pointsContainer = dialog.querySelector('.navigation-points');
+    
+    img.onload = function() {
+      // Determina escala da imagem em relação à planta real
+      const imageWidth = this.width;
+      const imageHeight = this.height;
+      
+      // Adiciona pontos de navegação na planta ampliada
+      scenes.forEach((sceneData, index) => {
+        if (!sceneData.center) return;
+        
+        // Detecta limites da geometria da nuvem de pontos
+        const floorLevel = detectFloorLevel();
+        const [minX, maxX, minZ, maxZ] = getPointCloudBounds();
+        
+        // Calcula a posição na imagem
+        const x = ((sceneData.center[0] - minX) / (maxX - minX)) * imageWidth;
+        const y = ((sceneData.center[2] - minZ) / (maxZ - minZ)) * imageHeight;
+        
+        // Cria o ponto de navegação
+        const navPoint = document.createElement('div');
+        navPoint.className = 'floor-plan-nav-point';
+        navPoint.dataset.sceneIndex = index;
+        navPoint.style.left = `${x}px`;
+        navPoint.style.top = `${y}px`;
+        
+        // Destaca o ponto atual
+        if (index === currentSceneIndex) {
+          navPoint.classList.add('current');
+        }
+        
+        // Adiciona tooltip com nome da cena
+        navPoint.title = sceneData.name;
+        
+        // Adiciona evento para navegar ao clicar
+        navPoint.addEventListener('click', function() {
+          navigateToScene(index);
+          // Fecha o diálogo após navegação
+          setTimeout(() => {
+            const dialog = document.getElementById('expanded-floor-plan');
+            if (dialog) document.body.removeChild(dialog);
+          }, 500);
+        });
+        
+        pointsContainer.appendChild(navPoint);
+      });
+    };
+  }
+  
+  // Função auxiliar para obter limites da nuvem de pontos
+  function getPointCloudBounds() {
+    if (!currentPointCloud) return [-10, 10, -10, 10]; // Valores padrão
+    
+    // Obtém a geometria da nuvem de pontos
+    const positions = currentPointCloud.geometry.getAttribute('position');
+    let minX = Infinity, maxX = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
+    
+    // Analisa todos os pontos para encontrar os limites
+    for (let i = 0; i < positions.count; i++) {
+      const x = positions.getX(i);
+      const z = positions.getZ(i);
+      
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minZ = Math.min(minZ, z);
+      maxZ = Math.max(maxZ, z);
+    }
+    
+    return [minX, maxX, minZ, maxZ];
   }
   
   // Adiciona pontos de navegação entre cenas
@@ -522,7 +1118,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
     }
     
     // Navegação entre cenas
-    handleNavPointClick(intersects);
+    handleNavPointClick(event);
   }
   
   // Manipulador de movimento do mouse
@@ -636,26 +1232,69 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
   
   // Navega para outra cena
   function navigateToScene(sceneIndex) {
-    if (sceneIndex >= 0 && sceneIndex < scenes.length) {
-      // Animação de fade out
-      fadeOut(function() {
-        currentSceneIndex = sceneIndex;
-        loadScene(scenes[sceneIndex]);
-        // Fade in após carregar
-        setTimeout(fadeIn, 500);
-      });
+    if (sceneIndex < 0 || sceneIndex >= scenes.length || sceneIndex === currentSceneIndex) {
+      return;
     }
+    
+    const targetScene = scenes[sceneIndex];
+    console.log(`Navegando para cena: ${targetScene.name}`);
+    
+    // Efeito de fade out/in para transição
+    fadeOut(() => {
+      // Carrega a nova cena
+      loadScene(targetScene);
+      currentSceneIndex = sceneIndex;
+      
+      // Quando a cena carregar, faz fade in
+      setTimeout(() => {
+        fadeIn();
+        
+        // Atualize a interface
+        updateUIState();
+        
+        // Atualiza a lista de cenas no sidebar para destacar a atual
+        updateScenesList();
+      }, 500);
+    });
   }
   
-  // Trata clique em pontos de navegação
-  function handleNavPointClick(intersects) {
-    if (intersects.length > 0) {
-      const object = intersects[0].object;
-      
-      if (object.userData && object.userData.type === 'navpoint') {
-        navigateToScene(object.userData.targetScene);
+  // Adicione esta função para efeito fade out
+  function fadeOut(callback) {
+    const fadeOverlay = document.createElement('div');
+    fadeOverlay.style.position = 'fixed';
+    fadeOverlay.style.top = '0';
+    fadeOverlay.style.left = '0';
+    fadeOverlay.style.width = '100%';
+    fadeOverlay.style.height = '100%';
+    fadeOverlay.style.backgroundColor = 'black';
+    fadeOverlay.style.opacity = '0';
+    fadeOverlay.style.transition = 'opacity 0.5s';
+    fadeOverlay.style.zIndex = '1000';
+    document.body.appendChild(fadeOverlay);
+    
+    // Força o reflow para que a transição funcione
+    void fadeOverlay.offsetWidth;
+    
+    fadeOverlay.style.opacity = '1';
+    
+    setTimeout(() => {
+      if (callback) callback();
+      // Não remove o overlay ainda, será usado para o fade in
+    }, 500);
+  }
+  
+  // Adicione esta função para efeito fade in
+  function fadeIn() {
+    const fadeOverlay = document.querySelector('div[style*="position: fixed"][style*="z-index: 1000"]');
+    if (!fadeOverlay) return;
+    
+    fadeOverlay.style.opacity = '0';
+    
+    setTimeout(() => {
+      if (fadeOverlay.parentNode) {
+        fadeOverlay.parentNode.removeChild(fadeOverlay);
       }
-    }
+    }, 500);
   }
   
   /*
@@ -937,73 +1576,95 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
   function toggleFloorPlan() {
     isFloorPlanVisible = !isFloorPlanVisible;
     
-    floorPlanElement.style.display = isFloorPlanVisible ? 'block' : 'none';
+    if (isFloorPlanVisible) {
+      // Mostra a planta baixa
+      floorPlanElement.style.display = 'block';
+      
+      // Recarrega a planta baixa atual se existir
+      if (currentSceneData && currentSceneData.files && currentSceneData.files.floor_plan) {
+        loadFloorPlan(currentSceneData.files.floor_plan);
+      } else {
+        showMessage('Planta baixa não disponível para esta cena');
+        isFloorPlanVisible = false;
+        floorPlanElement.style.display = 'none';
+      }
+      
+      document.getElementById('btn-floorplan').classList.add('active');
+    } else {
+      // Esconde a planta baixa
+      floorPlanElement.style.display = 'none';
+      document.getElementById('btn-floorplan').classList.remove('active');
+    }
     
     updateUIState();
   }
   
   // Alterna a vista doll house
-  function toggleDollhouseView() {
+  function toggleDollhouseMode() {
     isDollhouseMode = !isDollhouseMode;
     
+    // Detecta o nível do piso
+    const floorLevel = detectFloorLevel();
+    
     if (isDollhouseMode) {
-      // Salva posição atual da câmera
-      camera.userData.lastPosition = camera.position.clone();
-      camera.userData.lastTarget = controls.target.clone();
-      
-      // Move a câmera para cima, olhando para baixo
-      const currentScene = scenes[currentSceneIndex];
-      const center = currentScene.center ? new THREE.Vector3(...currentScene.center) : new THREE.Vector3(0, 0, 0);
-      
-      // Posição da câmera elevada
-      const dollhousePosition = center.clone().add(new THREE.Vector3(0, 15, 0));
-      
-      // Anima transição para dollhouse
-      animateCameraMove(dollhousePosition, center);
-      
-      showMessage('Vista Doll House ativada');
-    } else {
-      // Restaura posição anterior da câmera
-      if (camera.userData.lastPosition && camera.userData.lastTarget) {
-        animateCameraMove(camera.userData.lastPosition, camera.userData.lastTarget);
+      // Modo dollhouse - mostra a nuvem de pontos completa
+      if (panoramaSphere) {
+        panoramaSphere.visible = false;
       }
       
-      showMessage('Vista normal restaurada');
+      if (currentPointCloud) {
+        currentPointCloud.visible = true;
+      }
+      
+      // Guarda posição atual para poder voltar
+      savedCameraPosition = {
+        position: camera.position.clone(),
+        target: controls.target.clone()
+      };
+      
+      // Posição de câmera para vista de cima (semelhante ao Matterport)
+      const centerScene = currentSceneData?.center || [0, 0, 0];
+      
+      // Anima para a posição aérea - usa o nível do piso como referência
+      const targetPos = new THREE.Vector3(centerScene[0], floorLevel + 15, centerScene[2]);
+      const targetTarget = new THREE.Vector3(centerScene[0], floorLevel, centerScene[2]);
+      
+      animateCameraMovement(camera.position, targetPos, controls.target, targetTarget, 1000);
+      
+      // Ajusta controles para mais liberdade no modo dollhouse
+      controls.minPolarAngle = 0; // Permite olhar diretamente para baixo
+      controls.maxDistance = 50;  // Permite afastar mais
+      
+      showMessage('Modo Dollhouse Ativado');
+    } else {
+      // Volta ao modo normal - foca nas panorâmicas
+      if (panoramaSphere) {
+        panoramaSphere.visible = true;
+      }
+      
+      if (currentPointCloud) {
+        currentPointCloud.visible = false;
+      }
+      
+      // Restaura posição anterior usando a função animateCameraMovement
+      if (savedCameraPosition) {
+        animateCameraMovement(
+          camera.position,
+          savedCameraPosition.position,
+          controls.target,
+          savedCameraPosition.target,
+          1000
+        );
+      }
+      
+      // Restaura limitações de controles
+      controls.minPolarAngle = Math.PI * 0.1;
+      controls.maxDistance = 10;
+      
+      showMessage('Modo Normal Ativado');
     }
     
     updateUIState();
-  }
-  
-  // Anima a movimentação da câmera
-  function animateCameraMove(targetPosition, lookAtTarget) {
-    const startPosition = camera.position.clone();
-    const startTarget = controls.target.clone();
-    let startTime = null;
-    const duration = 1000; // 1 segundo
-    
-    function animate(currentTime) {
-      if (!startTime) startTime = currentTime;
-      const elapsedTime = currentTime - startTime;
-      const progress = Math.min(elapsedTime / duration, 1);
-      
-      // Easing function (ease in-out)
-      const easedProgress = progress < 0.5
-        ? 4 * progress * progress * progress
-        : 1 - Math.pow(-2 * progress + 2, 3) / 2;
-      
-      // Interpola posição
-      camera.position.lerpVectors(startPosition, targetPosition, easedProgress);
-      
-      // Interpola alvo
-      controls.target.lerpVectors(startTarget, lookAtTarget, easedProgress);
-      controls.update();
-      
-      if (progress < 1) {
-        requestAnimationFrame(animate);
-      }
-    }
-    
-    requestAnimationFrame(animate);
   }
   
   // Inicia/para o tour automático
@@ -1101,10 +1762,47 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
   
   // Controla a exibição do overlay de carregamento
   function showLoading(show) {
+    console.log('showLoading chamado com:', show);
+    
     if (show) {
+      console.log('Mostrando tela de carregamento');
+      if (!loadingOverlay) {
+        console.error('Elemento loadingOverlay não encontrado!');
+        return;
+      }
+      
       loadingOverlay.style.display = 'flex';
       loadingOverlay.style.opacity = '1';
+      
+      // Timeout de segurança - após 8 segundos, remove a tela de carregamento
+      setTimeout(() => {
+        if (loadingOverlay.style.display === 'flex') {
+          console.warn('Timeout de carregamento - forçando saída do estado de carregamento');
+          loadingOverlay.style.opacity = '0';
+          setTimeout(() => {
+            loadingOverlay.style.display = 'none';
+            
+            // Verifica se já existe um objeto na cena, caso contrário cria uma demo
+            const existingObjects = scene.children.filter(child => 
+              child.type === 'Mesh' || child.type === 'Points'
+            );
+            
+            if (existingObjects.length === 0) {
+              console.log('Nenhum objeto na cena, criando demo');
+              createDemoScene();
+            } else {
+              console.log('Objetos existentes na cena:', existingObjects.length);
+            }
+          }, 500);
+        }
+      }, 8000);
     } else {
+      console.log('Escondendo tela de carregamento');
+      if (!loadingOverlay) {
+        console.error('Elemento loadingOverlay não encontrado!');
+        return;
+      }
+      
       loadingOverlay.style.opacity = '0';
       setTimeout(() => {
         loadingOverlay.style.display = 'none';
@@ -1117,45 +1815,317 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
     return loadingOverlay.style.display !== 'none' && loadingOverlay.style.opacity !== '0';
   }
   
-  // Efeito de fade out
-  function fadeOut(callback) {
-    const fadeOverlay = document.createElement('div');
-    fadeOverlay.style.position = 'fixed';
-    fadeOverlay.style.top = '0';
-    fadeOverlay.style.left = '0';
-    fadeOverlay.style.width = '100%';
-    fadeOverlay.style.height = '100%';
-    fadeOverlay.style.backgroundColor = '#000';
-    fadeOverlay.style.opacity = '0';
-    fadeOverlay.style.zIndex = '1000';
-    fadeOverlay.style.transition = 'opacity 0.5s';
-    document.body.appendChild(fadeOverlay);
+  // Função para criar uma cena de demonstração em caso de erro
+  function createDemoScene() {
+    console.log('Criando cena demo como fallback...');
     
-    // Força reflow
-    void fadeOverlay.offsetWidth;
+    // Cria uma cena demo
+    const demoScene = {
+      name: 'Demo',
+      center: [0, 0, 0],
+      files: {
+        panorama: '/demo_panorama.jpg'
+      }
+    };
     
-    fadeOverlay.style.opacity = '1';
+    // Carrega a cena demo
+    loadScene(demoScene);
     
-    setTimeout(() => {
-      if (callback) callback();
+    // Atualiza variáveis de estado
+    scenes = [demoScene];
+    currentSceneIndex = 0;
+    
+    // Popula o menu
+    populateScenesMenu(scenes);
+  }
+
+  // Adiciona esta função para criar os círculos de navegação no estilo Matterport
+  function createNavigationPoints() {
+    console.log('Criando pontos de navegação estilo Matterport');
+    
+    // Remove pontos de navegação existentes
+    scene.children.forEach(child => {
+      if (child.userData && child.userData.type === 'navpoint') {
+        scene.remove(child);
+      }
+    });
+    
+    // Detecta o nível do piso
+    const floorLevel = detectFloorLevel();
+    
+    // Cria círculos para cada cena disponível
+    scenes.forEach((sceneData, index) => {
+      if (index === currentSceneIndex) return; // Não cria ponto para a cena atual
       
-      // Não remove o overlay ainda, será usado para fade in
-      fadeOverlay.id = 'fade-overlay';
-    }, 500);
+      // Verifica se a cena tem coordenadas
+      if (!sceneData.center) return;
+      
+      // Cria um círculo no chão (similar ao Matterport)
+      const circleGeometry = new THREE.CircleGeometry(0.4, 32);
+      const circleMaterial = new THREE.MeshBasicMaterial({
+        color: 0x00aaff,
+        transparent: true,
+        opacity: 0.7,
+        side: THREE.DoubleSide
+      });
+      
+      const navCircle = new THREE.Mesh(circleGeometry, circleMaterial);
+      
+      // Roda o círculo para ficar horizontal (no chão)
+      navCircle.rotation.x = -Math.PI / 2;
+      
+      // Posiciona o círculo no NÍVEL DO PISO DETECTADO
+      const position = new THREE.Vector3(
+        sceneData.center[0],
+        floorLevel + 0.01, // Ligeiramente acima do piso para evitar z-fighting
+        sceneData.center[2]
+      );
+      navCircle.position.copy(position);
+      
+      // Adiciona metadados
+      navCircle.userData = {
+        type: 'navpoint',
+        targetScene: index,
+        name: sceneData.name
+      };
+      
+      // Adiciona à cena
+      scene.add(navCircle);
+      
+      // Adiciona texto com o nome da cena
+      const textSprite = createTextSprite(sceneData.name);
+      textSprite.position.set(position.x, position.y + 0.5, position.z);
+      scene.add(textSprite);
+    });
   }
-  
-  // Efeito de fade in
-  function fadeIn() {
-    const fadeOverlay = document.getElementById('fade-overlay');
-    if (!fadeOverlay) return;
+
+  // Função para criar texto flutuante
+  function createTextSprite(message) {
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    canvas.width = 256;
+    canvas.height = 128;
     
-    fadeOverlay.style.opacity = '0';
+    context.font = "Bold 24px Arial";
+    context.fillStyle = "rgba(255,255,255,0.95)";
+    context.fillRect(0, 0, canvas.width, canvas.height);
     
-    setTimeout(() => {
-      document.body.removeChild(fadeOverlay);
-    }, 500);
+    context.fillStyle = "rgba(0,0,0,0.8)";
+    context.textAlign = "center";
+    context.fillText(message, canvas.width / 2, canvas.height / 2);
+    
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    
+    const spriteMaterial = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false
+    });
+    
+    const sprite = new THREE.Sprite(spriteMaterial);
+    sprite.scale.set(2, 1, 1);
+    
+    return sprite;
   }
-  
-  // Inicia o aplicativo quando o DOM estiver pronto
-  document.addEventListener('DOMContentLoaded', init);
+
+  // Adicione esta função para detectar o nível do piso automaticamente
+  function detectFloorLevel() {
+    if (!currentPointCloud) return 0;
+    
+    const positions = currentPointCloud.geometry.getAttribute('position');
+    
+    // Em vez de processar todos os pontos, usamos amostragem
+    const sampleSize = Math.min(1000, positions.count);
+    const step = Math.floor(positions.count / sampleSize);
+    
+    let yValues = [];
+    
+    for (let i = 0; i < positions.count; i += step) {
+      yValues.push(positions.getY(i));
+    }
+    
+    // Ordena os valores de Y
+    yValues.sort((a, b) => a - b);
+    
+    // Pega o valor de 5% mais baixo como nível do piso
+    const floorIndex = Math.floor(yValues.length * 0.05);
+    return yValues[floorIndex];
+  }
+
+  // Função para resetar a visualização para a posição inicial
+  function resetView() {
+    const floorLevel = detectFloorLevel();
+    const centerScene = currentSceneData?.center || [0, 0, 0];
+    
+    // Posição padrão: altura dos olhos, olhando para frente
+    const targetPos = new THREE.Vector3(centerScene[0], floorLevel + 1.6, centerScene[2]);
+    const targetTarget = new THREE.Vector3(centerScene[0], floorLevel + 1.6, centerScene[2] - 1);
+    
+    animateCameraMovement(camera.position, targetPos, controls.target, targetTarget, 1000);
+    
+    showMessage('Visualização resetada');
+  }
+
+  // Adicione esta função para atualizar a lista de cenas no sidebar
+  function updateScenesList() {
+    populateScenesMenu(scenes);
+  }
+
+  // Adicione esta função para criar um elemento para exibir os logs
+  function setupDebugUI() {
+    const debugDiv = document.createElement('div');
+    debugDiv.id = 'debug-log';
+    debugDiv.style.position = 'absolute';
+    debugDiv.style.top = '10px';
+    debugDiv.style.right = '10px';
+    debugDiv.style.width = '300px';
+    debugDiv.style.height = '200px';
+    debugDiv.style.background = 'rgba(0,0,0,0.7)';
+    debugDiv.style.color = '#fff';
+    debugDiv.style.padding = '10px';
+    debugDiv.style.fontSize = '12px';
+    debugDiv.style.overflow = 'auto';
+    debugDiv.style.zIndex = '100';
+    debugDiv.style.fontFamily = 'monospace';
+    debugDiv.style.borderRadius = '5px';
+    document.body.appendChild(debugDiv);
+    
+    const toggleButton = document.createElement('button');
+    toggleButton.textContent = 'Debug';
+    toggleButton.style.position = 'absolute';
+    toggleButton.style.top = '10px';
+    toggleButton.style.right = '320px';
+    toggleButton.style.zIndex = '100';
+    toggleButton.style.padding = '5px 10px';
+    toggleButton.onclick = () => {
+      debugDiv.style.display = debugDiv.style.display === 'none' ? 'block' : 'none';
+    };
+    document.body.appendChild(toggleButton);
+  }
+
+  // Adicione esta função para criar um elemento para exibir os logs
+  function logDebug(message, data) {
+    const timestamp = new Date().toLocaleTimeString();
+    console.log(`[${timestamp}] ${message}`);
+    if (data !== undefined) console.log(data);
+    
+    // Adiciona ao elemento de log na tela se existir
+    const debugElement = document.getElementById('debug-log');
+    if (debugElement) {
+      const item = document.createElement('div');
+      item.textContent = `[${timestamp}] ${message}`;
+      debugElement.appendChild(item);
+      debugElement.scrollTop = debugElement.scrollHeight;
+    }
+  }
+
+  // Adicione esta função que está faltando - causando o erro animateCameraMovement
+  function animateCameraMovement(startPos, endPos, startTarget, endTarget, duration) {
+    const startTime = Date.now();
+    
+    function animate() {
+      const now = Date.now();
+      const elapsed = now - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      
+      // Função de easing para movimento mais natural
+      const easeProgress = 1 - Math.pow(1 - progress, 3);
+      
+      // Interpola posição da câmera
+      camera.position.lerpVectors(startPos, endPos, easeProgress);
+      
+      // Interpola alvo dos controles
+      controls.target.lerpVectors(startTarget, endTarget, easeProgress);
+      controls.update();
+      
+      // Continua a animação se não terminou
+      if (progress < 1) {
+        requestAnimationFrame(animate);
+      }
+    }
+    
+    animate();
+  }
+
+  // Adicione esta função que está faltando - causando o erro handleNavPointClick
+  function handleNavPointClick(event) {
+    // Calcula coordenadas normalizadas do mouse (-1 a 1)
+    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+    
+    // Atualiza o raycaster com a posição do mouse
+    raycaster.setFromCamera(mouse, camera);
+    
+    // Obtém objetos que intersectam com o raio
+    const intersects = raycaster.intersectObjects(scene.children, true);
+    
+    // Verifica se algum ponto de navegação foi clicado
+    for (let i = 0; i < intersects.length; i++) {
+      const object = intersects[i].object;
+      if (object.userData && object.userData.type === 'navpoint') {
+        console.log(`Ponto de navegação clicado: ${object.userData.name}`);
+        navigateToScene(object.userData.targetScene);
+        return;
+      }
+    }
+  }
+
+  // Nova função para mostrar tela vazia com instruções
+  function showEmptySceneMessage() {
+    // Limpa qualquer cena existente
+    clearScene();
+    
+    // Adiciona texto na interface
+    infoElement.textContent = 'Nenhuma cena disponível';
+    
+    // Cria um elemento com instruções
+    const instrucDiv = document.createElement('div');
+    instrucDiv.className = 'instructions-overlay';
+    instrucDiv.innerHTML = `
+      <div class="instructions-box">
+        <h2>Bem-vindo ao Visualizador 3D</h2>
+        <p>Nenhuma cena foi encontrada. Para começar:</p>
+        <ol>
+          <li>Coloque suas nuvens de pontos na pasta 'output'</li>
+          <li>Coloque suas panorâmicas na pasta 'input/panorama'</li>
+          <li>Coloque seus TrueViews na pasta 'input/trueview'</li>
+          <li>Reinicie o aplicativo</li>
+        </ol>
+      </div>
+    `;
+    
+    document.body.appendChild(instrucDiv);
+  }
+
+  // Nova função para mostrar mensagem de erro
+  function showErrorMessage() {
+    // Limpa qualquer cena existente
+    clearScene();
+    
+    // Adiciona texto na interface
+    infoElement.textContent = 'Erro de carregamento';
+    
+    // Cria um elemento com a mensagem de erro
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'error-overlay';
+    errorDiv.innerHTML = `
+      <div class="error-box">
+        <h2>Erro de Conexão</h2>
+        <p>Não foi possível carregar as cenas do servidor.</p>
+        <button id="retry-btn">Tentar Novamente</button>
+      </div>
+    `;
+    
+    document.body.appendChild(errorDiv);
+    
+    // Adiciona evento para tentar novamente
+    document.getElementById('retry-btn').addEventListener('click', function() {
+      document.body.removeChild(errorDiv);
+      loadScenes();
+    });
+  }
+
+  console.log('main.js foi carregado e inicializado');
 })();

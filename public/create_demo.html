@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Criar Imagem Demo Panorâmica</title>
+    <style>
+        body { font-family: Arial; text-align: center; margin: 20px; }
+        canvas { border: 1px solid #ccc; margin: 20px auto; display: block; }
+        button { padding: 10px 20px; }
+    </style>
+</head>
+<body>
+    <h1>Criador de Panorama Demo</h1>
+    <canvas id="demoCanvas" width="2048" height="1024"></canvas>
+    <button id="downloadBtn">Baixar Imagem Demo (demo_panorama.jpg)</button>
+    
+    <script>
+        // Create a simple panorama demo
+        const canvas = document.getElementById('demoCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Create a gradient background
+        const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+        gradient.addColorStop(0, '#0055AA');
+        gradient.addColorStop(0.5, '#3388CC');
+        gradient.addColorStop(1, '#66AADD');
+        
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Add a grid pattern
+        ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+        ctx.lineWidth = 2;
+        
+        const gridSize = 64;
+        for (let x = 0; x < canvas.width; x += gridSize) {
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, canvas.height);
+            ctx.stroke();
+        }
+        
+        for (let y = 0; y < canvas.height; y += gridSize) {
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(canvas.width, y);
+            ctx.stroke();
+        }
+        
+        // Add text
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 64px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('PANORAMA DEMO', canvas.width/2, canvas.height/2 - 50);
+        
+        ctx.font = '32px Arial';
+        ctx.fillText('Esta é uma imagem panorâmica de demonstração', canvas.width/2, canvas.height/2 + 30);
+        ctx.fillText('Substitua por uma imagem panorâmica real', canvas.width/2, canvas.height/2 + 80);
+        
+        // Download button
+        document.getElementById('downloadBtn').addEventListener('click', function() {
+            const link = document.createElement('a');
+            link.download = 'demo_panorama.jpg';
+            link.href = canvas.toDataURL('image/jpeg', 0.8);
+            link.click();
+        });
+    </script>
+</body>
+</html> 
