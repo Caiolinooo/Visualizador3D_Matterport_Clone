@@ -39,6 +39,10 @@
   let savedCameraPosition;
   let currentSceneData;
   
+  // Adicione estas variáveis globais no início para controlar as nuvens múltiplas
+  let pointClouds = []; // Array para armazenar todas as nuvens carregadas
+  let unifiedMode = true; // Modo unificado por padrão (todas as nuvens visíveis)
+  
   // Elementos DOM
   const loadingOverlay = document.getElementById('loading-overlay');
   const infoElement = document.getElementById('info');
@@ -220,6 +224,13 @@
     updateUIState();
     
     console.log('UI inicializada, botões conectados');
+    
+    // Adiciona botão para alternar entre modo unificado e cena única
+    const unifiedButton = document.createElement('button');
+    unifiedButton.textContent = 'Alternar Modo Unificado';
+    unifiedButton.className = 'control-button';
+    unifiedButton.addEventListener('click', toggleUnifiedMode);
+    document.getElementById('controls').appendChild(unifiedButton);
   }
   
   // Loop de animação
@@ -345,10 +356,10 @@
     // Guarda referência à cena atual
     currentSceneData = sceneData;
     
-    // Limpa a cena anterior
-    clearScene();
+    // SOMENTE limpa elementos que não são reutilizáveis (não limpa nuvens de pontos no modo unificado)
+    clearScenePartial();
     
-    // Quantos itens precisamos carregar (para rastrear progresso)
+    // Quantos itens precisamos carregar
     const itemsToLoad = Object.keys(sceneData.files || {}).length;
     let itemsLoaded = 0;
     
@@ -366,6 +377,9 @@
           console.log('Criando pontos de navegação entre cenas');
           createNavigationPoints();
         }
+        
+        // Posiciona a câmera corretamente na cena atual
+        positionCameraInScene(sceneData);
       }
     };
     
@@ -395,13 +409,29 @@
     // Carrega nuvem de pontos (se disponível)
     if (sceneData.files && sceneData.files.cloud) {
       console.log('Tentando carregar nuvem de pontos:', sceneData.files.cloud);
-      loadPointCloud(sceneData.files.cloud, () => {
-        console.log('Nuvem de pontos carregada com sucesso');
+      
+      // Verifica se já carregamos esta nuvem antes (para o modo unificado)
+      const existingCloud = pointClouds.find(pc => pc.userData.url === sceneData.files.cloud);
+      
+      if (existingCloud) {
+        console.log('Nuvem já carregada anteriormente, reutilizando');
+        // Se já existe, apenas atualiza a visibilidade
+        if (!unifiedMode) {
+          pointClouds.forEach(cloud => {
+            cloud.visible = (cloud.userData.url === sceneData.files.cloud);
+          });
+        }
         updateProgress();
-      }, (error) => {
-        console.error('Erro ao carregar nuvem de pontos:', error);
-        updateProgress();
-      });
+      } else {
+        // Se não existe, carrega nova nuvem
+        loadPointCloud(sceneData.files.cloud, sceneData.center, () => {
+          console.log('Nuvem de pontos carregada com sucesso');
+          updateProgress();
+        }, (error) => {
+          console.error('Erro ao carregar nuvem de pontos:', error);
+          updateProgress();
+        });
+      }
     }
     
     // Carrega planta baixa (se disponível)
@@ -433,11 +463,16 @@
     }, 15000); // 15 segundos
   }
   
-  // Função para limpar completamente a cena
-  function clearScene() {
-    // Remove todos os objetos 3D da cena
-    while (scene.children.length > 0) {
-      const object = scene.children[0];
+  // Nova função que limpa apenas parte da cena, preservando as nuvens de pontos no modo unificado
+  function clearScenePartial() {
+    // Remove todos os objetos 3D da cena EXCETO as nuvens de pontos em modo unificado
+    for (let i = scene.children.length - 1; i >= 0; i--) {
+      const object = scene.children[i];
+      
+      // Pula as nuvens de pontos se estiver em modo unificado
+      if (unifiedMode && object.userData && object.userData.type === 'pointcloud') {
+        continue;
+      }
       
       // Limpa geometrias e materiais para evitar vazamento de memória
       if (object.geometry) {
@@ -457,7 +492,11 @@
     
     // Limpa referências específicas
     panoramaSphere = null;
-    currentPointCloud = null;
+    
+    // Apenas limpa a referência à nuvem atual se NÃO estiver em modo unificado
+    if (!unifiedMode) {
+      currentPointCloud = null;
+    }
     
     // Reseta medições
     measurementPoints = [];
@@ -476,7 +515,7 @@
     // Limpa tags
     tags = [];
     
-    console.log('Cena limpa completamente');
+    console.log('Cena parcialmente limpa, preservando nuvens em modo unificado');
   }
   
   // Reinicia todos os modos
@@ -538,48 +577,26 @@
           depthTest: false
         });
         
-        // Cria uma esfera invertida com tamanho adequado (menor que Matterport)
-        const geometry = new THREE.SphereGeometry(40, 64, 64);
+        // Cria uma esfera invertida com tamanho adequado
+        const geometry = new THREE.SphereGeometry(15, 64, 64);
         
         // Cria o Mesh
         panoramaSphere = new THREE.Mesh(geometry, material);
         panoramaSphere.name = 'panorama';
         panoramaSphere.renderOrder = -1; // Renderiza antes de outros objetos
         
-        // Posiciona a esfera no centro da cena, ajustando à altura dos olhos
+        // Posiciona a esfera exatamente no centro da cena atual
         if (currentSceneData && currentSceneData.center) {
-          const floorLevel = detectFloorLevel();
-          panoramaSphere.position.set(
-            currentSceneData.center[0],
-            floorLevel + 1.6, // Altura dos olhos (1.6m)
-            currentSceneData.center[2]
-          );
+          const center = currentSceneData.center;
+          panoramaSphere.position.set(center[0], center[1], center[2]);
+          console.log(`Panorâmica posicionada em: [${center.join(', ')}]`);
         }
         
         // Adiciona a esfera à cena
         scene.add(panoramaSphere);
         
-        // Atualiza a câmera para o centro da panorâmica e nível dos olhos
-        if (currentSceneData && currentSceneData.center) {
-          const floorLevel = detectFloorLevel();
-          const eyeHeight = floorLevel + 1.6; // Altura dos olhos
-          
-          // Posição da câmera no centro da panorâmica, altura dos olhos
-          camera.position.set(
-            currentSceneData.center[0],
-            eyeHeight,
-            currentSceneData.center[2]
-          );
-          
-          // Alvo dos controles ligeiramente à frente
-          controls.target.set(
-            currentSceneData.center[0],
-            eyeHeight,
-            currentSceneData.center[2] - 0.1 // Olhando um pouco para frente
-          );
-          
-          controls.update();
-        }
+        // Posiciona a câmera no centro da panorâmica na altura dos olhos
+        positionCameraInScene(currentSceneData);
         
         if (callback) callback();
       },
@@ -644,51 +661,72 @@
     }, 400); // Tempo para o fade ocorrer
   }
   
-  // Modifique a função loadPointCloud para garantir que a nuvem seja carregada
-  function loadPointCloud(cloudUrl, callback) {
+  // Modificar loadPointCloud para incluir as coordenadas do centro da cena
+  function loadPointCloud(cloudUrl, sceneCenter, callback, errorCallback) {
     if (!cloudUrl) {
-      console.warn('URL de nuvem de pontos não fornecida, tentando alternativa');
-      
-      // Tenta caminhos alternativos para a nuvem de pontos
-      const sceneFolder = currentSceneData?.name?.toLowerCase() || 'scan';
-      const alternativePath = `/output/${sceneFolder}/output_cloud.ply`;
-      
-      console.log('Tentando carregar nuvem de backup:', alternativePath);
-      
-      // Tenta carregar a nuvem alternativa
-      const plyLoader = new THREE.PLYLoader();
-      plyLoader.load(
-        alternativePath,
-        function(geometry) {
-          // Processamento normal da nuvem
-          createPointCloud(geometry);
-          if (callback) callback();
-        },
-        undefined,
-        function(error) {
-          console.error('Erro ao carregar nuvem alternativa:', error);
-          if (callback) callback();
-        }
-      );
-      
+      console.warn('URL de nuvem de pontos não fornecida');
+      if (errorCallback) errorCallback('URL não fornecida');
       return;
     }
     
     console.log('Carregando nuvem de pontos:', cloudUrl);
+    showLoading(true);
     
     const plyLoader = new THREE.PLYLoader();
     plyLoader.load(
       cloudUrl,
       function(geometry) {
-        createPointCloud(geometry);
+        console.log(`Nuvem carregada: ${geometry.attributes.position.count} pontos`);
+        
+        // Cria Material para os pontos
+        const material = new THREE.PointsMaterial({
+          size: 0.02,
+          vertexColors: true,
+          transparent: true,
+          opacity: 0.8
+        });
+        
+        // Cria a nuvem de pontos
+        const pointCloud = new THREE.Points(geometry, material);
+        
+        // Posiciona a nuvem de acordo com as coordenadas centrais da cena
+        if (sceneCenter && Array.isArray(sceneCenter) && sceneCenter.length === 3) {
+          console.log(`Posicionando nuvem nas coordenadas: [${sceneCenter.join(', ')}]`);
+          pointCloud.position.set(sceneCenter[0], sceneCenter[1], sceneCenter[2]);
+        }
+        
+        // Adiciona metadados à nuvem
+        pointCloud.userData = {
+          type: 'pointcloud',
+          url: cloudUrl,
+          center: sceneCenter
+        };
+        
+        // Adiciona à cena
+        scene.add(pointCloud);
+        
+        // Guarda referência
+        currentPointCloud = pointCloud;
+        
+        // Adiciona ao array de nuvens no modo unificado
+        pointClouds.push(pointCloud);
+        
+        // Atualiza visibilidade com base no modo atual
+        updatePointCloudsVisibility();
+        
+        // Piso detectado é importante para posicionar elementos
+        const floorLevel = detectFloorLevel();
+        console.log('Piso detectado em:', floorLevel);
+        
         if (callback) callback();
       },
       function(xhr) {
-        console.log(`Nuvem: ${Math.round((xhr.loaded / xhr.total) * 100)}% carregada`);
+        const percent = Math.round((xhr.loaded / xhr.total) * 100);
+        showMessage(`Nuvem: ${percent}% carregada`);
       },
       function(error) {
         console.error('Erro ao carregar nuvem de pontos:', error);
-        if (callback) callback();
+        if (errorCallback) errorCallback(error);
       }
     );
   }
@@ -1096,22 +1134,22 @@
   
   // Posiciona a câmera na cena
   function positionCameraInScene(sceneData) {
-    if (!sceneData.center) return;
+    if (!sceneData || !sceneData.center) {
+      console.warn('Não foi possível posicionar a câmera: dados da cena incompletos');
+      return;
+    }
     
-    // Posição inicial baseada no centro da cena
-    const center = new THREE.Vector3(...sceneData.center);
+    const center = sceneData.center;
+    const floorLevel = detectFloorLevel();
+    const eyeHeight = floorLevel + 1.6; // Altura dos olhos (1.6m)
     
-    // Define altura da câmera (1.6 metros)
-    center.y = 1.6;
+    console.log(`Posicionando câmera em [${center[0]}, ${eyeHeight}, ${center[2]}]`);
     
-    // Define posição da câmera
-    camera.position.copy(center);
+    // Posiciona a câmera no centro da cena, na altura dos olhos
+    camera.position.set(center[0], eyeHeight, center[2]);
     
-    // Define alvo da câmera (olhando um pouco à frente)
-    const target = center.clone();
-    target.z -= 1; // Olhando para Z negativo (para frente)
-    
-    controls.target.copy(target);
+    // Define o alvo dos controles
+    controls.target.set(center[0], eyeHeight, center[2] - 0.1);
     controls.update();
   }
   
@@ -1851,13 +1889,39 @@
     
     // Detecta o nível do piso
     const floorLevel = detectFloorLevel();
+    console.log('Nível do piso para pontos de navegação:', floorLevel);
     
     // Cria círculos para cada cena disponível
     scenes.forEach((sceneData, index) => {
       if (index === currentSceneIndex) return; // Não cria ponto para a cena atual
       
       // Verifica se a cena tem coordenadas
-      if (!sceneData.center) return;
+      if (!sceneData.center) {
+        console.warn(`Cena ${sceneData.name} não tem coordenadas de centro definidas`);
+        return;
+      }
+      
+      const center = sceneData.center;
+      
+      // Calcula a distância entre a cena atual e esta cena
+      let distance = 0;
+      if (currentSceneData && currentSceneData.center) {
+        const currentCenter = currentSceneData.center;
+        distance = Math.sqrt(
+          Math.pow(currentCenter[0] - center[0], 2) +
+          Math.pow(currentCenter[1] - center[1], 2) +
+          Math.pow(currentCenter[2] - center[2], 2)
+        );
+      }
+      
+      // Se a distância for muito grande, não criar ponto de navegação
+      const MAX_NAV_DISTANCE = 50; // Ajuste conforme necessário para o seu espaço
+      if (distance > MAX_NAV_DISTANCE) {
+        console.log(`Ponto de navegação para ${sceneData.name} ignorado: distância ${distance.toFixed(2)}m (muito longe)`);
+        return;
+      }
+      
+      console.log(`Criando ponto de navegação para ${sceneData.name} a ${distance.toFixed(2)}m de distância`);
       
       // Cria um círculo no chão (similar ao Matterport)
       const circleGeometry = new THREE.CircleGeometry(0.4, 32);
@@ -1875,9 +1939,9 @@
       
       // Posiciona o círculo no NÍVEL DO PISO DETECTADO
       const position = new THREE.Vector3(
-        sceneData.center[0],
+        center[0],
         floorLevel + 0.01, // Ligeiramente acima do piso para evitar z-fighting
-        sceneData.center[2]
+        center[2]
       );
       navCircle.position.copy(position);
       
@@ -1885,181 +1949,83 @@
       navCircle.userData = {
         type: 'navpoint',
         targetScene: index,
-        name: sceneData.name
+        name: sceneData.name,
+        distance: distance
       };
       
       // Adiciona à cena
       scene.add(navCircle);
       
-      // Adiciona texto com o nome da cena
-      const textSprite = createTextSprite(sceneData.name);
+      // Adiciona texto com o nome da cena e distância
+      const textLabel = `${sceneData.name}\n${distance.toFixed(1)}m`;
+      const textSprite = createTextSprite(textLabel);
       textSprite.position.set(position.x, position.y + 0.5, position.z);
+      textSprite.userData = { type: 'navlabel', targetScene: index };
       scene.add(textSprite);
+      
+      // Adiciona uma seta indicando a direção
+      addDirectionArrow(position, center);
     });
   }
 
-  // Função para criar texto flutuante
-  function createTextSprite(message) {
-    const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d');
-    canvas.width = 256;
-    canvas.height = 128;
+  // Função para criar uma seta indicando a direção da cena
+  function addDirectionArrow(position, targetCenter) {
+    if (!currentSceneData || !currentSceneData.center) return;
     
-    context.font = "Bold 24px Arial";
-    context.fillStyle = "rgba(255,255,255,0.95)";
-    context.fillRect(0, 0, canvas.width, canvas.height);
+    const currentCenter = currentSceneData.center;
     
-    context.fillStyle = "rgba(0,0,0,0.8)";
-    context.textAlign = "center";
-    context.fillText(message, canvas.width / 2, canvas.height / 2);
+    // Calcula vetor de direção entre as cenas (apenas no plano XZ)
+    const direction = new THREE.Vector2(
+      targetCenter[0] - currentCenter[0],
+      targetCenter[2] - currentCenter[2]
+    ).normalize();
     
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.needsUpdate = true;
+    // Cria geometria para a seta
+    const arrowLength = 0.3;
+    const arrowGeometry = new THREE.BufferGeometry();
     
-    const spriteMaterial = new THREE.SpriteMaterial({
-      map: texture,
-      transparent: true,
-      depthTest: false,
-      depthWrite: false
-    });
+    // Ponto base da seta
+    const base = new THREE.Vector3(position.x, position.y + 0.02, position.z);
     
-    const sprite = new THREE.Sprite(spriteMaterial);
-    sprite.scale.set(2, 1, 1);
+    // Ponta da seta
+    const tip = new THREE.Vector3(
+      base.x + direction.x * arrowLength,
+      base.y,
+      base.z + direction.y * arrowLength
+    );
     
-    return sprite;
-  }
-
-  // Adicione esta função para detectar o nível do piso automaticamente
-  function detectFloorLevel() {
-    // Verifica se currentPointCloud existe
-    if (!currentPointCloud) return 0;
-    
-    // Verifica se a geometria existe
-    if (!currentPointCloud.geometry) return 0;
-    
-    // Verifica se o atributo position existe
-    const positions = currentPointCloud.geometry.getAttribute ? 
-                      currentPointCloud.geometry.getAttribute('position') : null;
-    
-    // Se não há posições, retorna valor padrão
-    if (!positions || !positions.count) return 0;
-    
-    // Em vez de processar todos os pontos, usamos amostragem
-    const sampleSize = Math.min(1000, positions.count);
-    const step = Math.floor(positions.count / sampleSize);
-    
-    let yValues = [];
-    
-    for (let i = 0; i < positions.count; i += step) {
-      yValues.push(positions.getY(i));
-    }
-    
-    // Ordena os valores de Y
-    yValues.sort((a, b) => a - b);
-    
-    // Pega o valor de 5% mais baixo como nível do piso
-    const floorIndex = Math.floor(yValues.length * 0.05);
-    return yValues[floorIndex] || 0; // Retorna 0 se o array estiver vazio
-  }
-
-  // Função para resetar a visualização para a posição inicial
-  function resetView() {
-    const floorLevel = detectFloorLevel();
-    const centerScene = currentSceneData?.center || [0, 0, 0];
-    
-    // Posição padrão: altura dos olhos, olhando para frente
-    const targetPos = new THREE.Vector3(centerScene[0], floorLevel + 1.6, centerScene[2]);
-    const targetTarget = new THREE.Vector3(centerScene[0], floorLevel + 1.6, centerScene[2] - 1);
-    
-    animateCameraMovement(camera.position, targetPos, controls.target, targetTarget, 1000);
-    
-    showMessage('Visualização resetada');
-  }
-
-  // Adicione esta função para atualizar a lista de cenas no sidebar
-  function updateScenesList() {
-    populateScenesMenu(scenes);
-  }
-
-  // Adicione esta função para criar um elemento para exibir os logs
-  function setupDebugUI() {
-    const debugDiv = document.createElement('div');
-    debugDiv.id = 'debug-log';
-    debugDiv.style.position = 'absolute';
-    debugDiv.style.top = '10px';
-    debugDiv.style.right = '10px';
-    debugDiv.style.width = '300px';
-    debugDiv.style.height = '200px';
-    debugDiv.style.background = 'rgba(0,0,0,0.7)';
-    debugDiv.style.color = '#fff';
-    debugDiv.style.padding = '10px';
-    debugDiv.style.fontSize = '12px';
-    debugDiv.style.overflow = 'auto';
-    debugDiv.style.zIndex = '100';
-    debugDiv.style.fontFamily = 'monospace';
-    debugDiv.style.borderRadius = '5px';
-    document.body.appendChild(debugDiv);
-    
-    const toggleButton = document.createElement('button');
-    toggleButton.textContent = 'Debug';
-    toggleButton.style.position = 'absolute';
-    toggleButton.style.top = '10px';
-    toggleButton.style.right = '320px';
-    toggleButton.style.zIndex = '100';
-    toggleButton.style.padding = '5px 10px';
-    toggleButton.onclick = () => {
-      debugDiv.style.display = debugDiv.style.display === 'none' ? 'block' : 'none';
-    };
-    document.body.appendChild(toggleButton);
-  }
-
-  // Adicione esta função para criar um elemento para exibir os logs
-  function logDebug(message, data) {
-    const timestamp = new Date().toLocaleTimeString();
-    console.log(`[${timestamp}] ${message}`);
-    if (data !== undefined) console.log(data);
-    
-    // Adiciona ao elemento de log na tela se existir
-    const debugElement = document.getElementById('debug-log');
-    if (debugElement) {
-      const item = document.createElement('div');
-      item.textContent = `[${timestamp}] ${message}`;
-      debugElement.appendChild(item);
-      debugElement.scrollTop = debugElement.scrollHeight;
-    }
-  }
-
-  // Adicione esta função que está faltando - causando o erro animateCameraMovement
-  function animateCameraMovement(startPos, endPos, startTarget, endTarget, duration) {
-    const startTime = Date.now();
-    
-    function animate() {
-      const now = Date.now();
-      const elapsed = now - startTime;
-      const progress = Math.min(elapsed / duration, 1);
+    // Vértices para a seta (linha e cabeça)
+    const vertices = [
+      // Linha principal
+      base.x, base.y, base.z,
+      tip.x, tip.y, tip.z,
       
-      // Função de easing para movimento mais natural
-      const easeProgress = 1 - Math.pow(1 - progress, 3);
+      // Cabeça da seta (asa 1)
+      tip.x, tip.y, tip.z,
+      tip.x - direction.x * 0.1 - direction.y * 0.1, tip.y, tip.z - direction.y * 0.1 + direction.x * 0.1,
       
-      // Interpola posição da câmera
-      camera.position.lerpVectors(startPos, endPos, easeProgress);
-      
-      // Interpola alvo dos controles
-      controls.target.lerpVectors(startTarget, endTarget, easeProgress);
-      controls.update();
-      
-      // Continua a animação se não terminou
-      if (progress < 1) {
-        requestAnimationFrame(animate);
-      }
-    }
+      // Cabeça da seta (asa 2)
+      tip.x, tip.y, tip.z,
+      tip.x - direction.x * 0.1 + direction.y * 0.1, tip.y, tip.z - direction.y * 0.1 - direction.x * 0.1
+    ];
     
-    animate();
+    arrowGeometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+    
+    // Material para a seta
+    const arrowMaterial = new THREE.LineBasicMaterial({ color: 0xffaa00, linewidth: 2 });
+    
+    // Cria a seta
+    const arrow = new THREE.LineSegments(arrowGeometry, arrowMaterial);
+    arrow.userData = { type: 'navArrow' };
+    
+    // Adiciona à cena
+    scene.add(arrow);
   }
 
-  // Adicione esta função que está faltando - causando o erro handleNavPointClick
+  // Melhoria na função que lida com clique em pontos de navegação
   function handleNavPointClick(event) {
     console.log('Processando clique para navegação');
+    
     // Converte coordenadas do mouse para coordenadas normalizadas (-1 a 1)
     mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
     mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
@@ -2072,22 +2038,28 @@
     
     console.log('Objetos intersectados:', intersects.length);
     
-    // Verifica se clicou em algum ponto de navegação
+    // Verifica se clicou em algum ponto de navegação ou texto associado
     for (let i = 0; i < intersects.length; i++) {
       const object = intersects[i].object;
       
-      console.log('Verificando objeto:', object.name, object.userData);
+      // Verifica propriedades para debug
+      if (object.userData) {
+        console.log('Objeto clicado:', object.userData);
+      }
       
-      // Verifica se é um ponto de navegação
-      if (object.userData && object.userData.type === 'navpoint') {
-        console.log('Ponto de navegação encontrado, navegando para:', object.userData.targetScene);
+      // Verifica se é um ponto de navegação ou texto associado
+      if (object.userData && 
+          (object.userData.type === 'navpoint' || object.userData.type === 'navlabel')) {
+        const targetIndex = object.userData.targetScene;
+        console.log('Ponto de navegação encontrado, navegando para:', targetIndex);
         
-        // Navega para a cena alvo
-        navigateToScene(object.userData.targetScene);
+        // Navegação entre cenas com efeito de fade
+        navigateToScene(targetIndex);
         return true;
       }
     }
     
+    // Nenhum ponto de navegação clicado
     return false;
   }
 
@@ -2238,6 +2210,30 @@
         }, 400);
       }
     }, 800);
+  }
+
+  // Nova função para alternar entre modo unificado e cena única
+  function toggleUnifiedMode() {
+    unifiedMode = !unifiedMode;
+    showMessage(unifiedMode ? 'Modo unificado: TODAS as nuvens' : 'Modo único: apenas cena atual');
+    
+    // Atualiza visibilidade das nuvens
+    updatePointCloudsVisibility();
+  }
+
+  // Função para atualizar a visibilidade das nuvens baseado no modo
+  function updatePointCloudsVisibility() {
+    if (unifiedMode) {
+      // No modo unificado, todas as nuvens ficam visíveis
+      pointClouds.forEach(cloud => {
+        cloud.visible = true;
+      });
+    } else {
+      // No modo único, apenas a nuvem da cena atual fica visível
+      pointClouds.forEach((cloud, index) => {
+        cloud.visible = (index === currentSceneIndex);
+      });
+    }
   }
 
   console.log('main.js foi carregado e inicializado');
