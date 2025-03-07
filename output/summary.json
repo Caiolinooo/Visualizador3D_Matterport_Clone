@@ -1,9 +1,0 @@
-{
-    "scan": [
-        "center_coordinates.txt",
-        "floor_plan.png",
-        "output_cloud.ply",
-        "output_mesh.ply",
-        "scan.pts"
-    ]
-}

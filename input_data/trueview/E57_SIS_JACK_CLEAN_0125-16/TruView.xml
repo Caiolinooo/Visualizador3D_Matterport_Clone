@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<?xml-stylesheet type="text/xsl" href="CycloneXUI.xslt" ?>
-<cx:Dataset xmlns:cx="http://www.leica-geosystems.com/namespaces/TruView" Name="Test Data Set #1" SaveMarkBox="true" ProgressBox="true">
-  <cx:Location>file:///C:/users/micurs/dev/Leica/CycloneX/TestDataSet/</cx:Location>
-</cx:Dataset>

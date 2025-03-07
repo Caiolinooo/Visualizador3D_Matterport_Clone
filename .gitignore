@@ -1,4 +1,58 @@
-.pts
-.jpg
-.png
-.jpeg
+# Dependências
+node_modules/
+.pnp/
+.pnp.js
+
+# Arquivos de build
+/dist/
+/build/
+/out/
+
+# Arquivos de ambiente
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/
+*.log
+
+# Diretórios de dados
+/input/
+/input_data/
+/output/
+*.pts
+*.ply
+*.e57
+*.jpg
+*.png
+*.obj
+*.mtl
+
+# Arquivos de sistema
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Arquivos de IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Arquivos de cache
+.cache/
+.npm/
+.eslintcache
+
+# Arquivos temporários
+*.tmp
+*.temp
+
+# Adicionar browser-tools-mcp
+browser-tools-mcp/

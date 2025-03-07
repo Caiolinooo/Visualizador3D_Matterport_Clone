@@ -8,6 +8,11 @@
  * - Vista dollhouse e planta baixa
  * - Anotações/tags nos ambientes
  * - Tour automático
+ * 
+ * INSTRUÇÕES PARA DEPURAÇÃO:
+ * 1. Verifique a pasta output/ - deve conter pastas com arquivos output_cloud.ply
+ * 2. Verifique a pasta input/panorama/ - deve conter imagens panorâmicas
+ * 3. F12 para ver erros no console do navegador
  */
 
 // Remova as importações ES6 que estão causando problemas
@@ -325,26 +330,12 @@
     // Guarda referência à cena atual
     currentSceneData = sceneData;
     
-    // Limpa a cena atual
+    // Limpa a cena anterior
     clearScene();
     
-    // Mostra status da cena
-    if (sceneData.status === 'pending') {
-      showMessage(sceneData.message || 'Esta cena ainda não foi processada');
-      showLoading(false);
-      return;
-    }
-    
-    // Funções para carregar componentes da cena
-    const toLoad = {
-      panorama: (sceneData.files.panorama !== undefined || sceneData.files.cubemap !== undefined),
-      cloud: sceneData.files.cloud !== undefined,
-      floorPlan: sceneData.files.floor_plan !== undefined
-    };
-    
-    // Contador para controlar quando todos os componentes foram carregados
+    // Quantos itens precisamos carregar (para rastrear progresso)
+    let totalToLoad = 0;
     let loadedCount = 0;
-    const totalToLoad = Object.values(toLoad).filter(v => v).length;
     
     // Função para verificar se tudo foi carregado
     function checkAllLoaded() {
@@ -353,9 +344,11 @@
       
       if (loadedCount >= totalToLoad) {
         showLoading(false);
+        showMessage('Cena carregada com sucesso');
         
         // Detecta o nível do piso
         const floorLevel = detectFloorLevel();
+        console.log('Piso detectado em:', floorLevel);
         
         // Configura a câmera na posição de uma pessoa
         if (sceneData.center) {
@@ -366,72 +359,99 @@
           controls.update();
         }
         
-        // Cria pontos de navegação
+        // Cria pontos de navegação para outras cenas
         createNavigationPoints();
-        
-        // Prioriza a visualização da panorâmica
-        if (panoramaSphere) {
-          panoramaSphere.visible = true;
-          // Posiciona a panorâmica na altura correta (nível do piso + altura dos olhos)
-          if (sceneData.center) {
-            panoramaSphere.position.set(
-              sceneData.center[0],
-              floorLevel + 1.6,
-              sceneData.center[2]
-            );
-          }
-        }
-        
-        if (currentPointCloud) {
-          currentPointCloud.visible = isDollhouseMode; // Só mostra se estiver em modo dollhouse
-        }
-        
-        // Atualiza interface
-        infoElement.textContent = `Cena: ${sceneData.name}`;
       }
     }
     
-    // Carrega panorama primeiro (equiretangular ou cubemap)
-    if (toLoad.panorama) {
-      const panoramaData = sceneData.files.panorama || sceneData.files.cubemap;
-      loadPanorama(panoramaData, checkAllLoaded);
+    // Carrega panorama (se disponível)
+    if (sceneData.files && sceneData.files.panorama) {
+      totalToLoad++;
+      loadPanorama(sceneData.files.panorama, checkAllLoaded);
+    } else if (sceneData.panorama) {
+      totalToLoad++;
+      loadPanorama(sceneData.panorama, checkAllLoaded);
     }
     
-    // Depois carrega nuvem de pontos
-    if (toLoad.cloud) {
-      loadPointCloud(sceneData.files.cloud, checkAllLoaded);
+    // Carrega nuvem de pontos (se disponível)
+    if (sceneData.files && sceneData.files.pointcloud) {
+      totalToLoad++;
+      loadPointCloud(sceneData.files.pointcloud, checkAllLoaded);
+    } else if (sceneData.pointcloud) {
+      totalToLoad++;
+      loadPointCloud(sceneData.pointcloud, checkAllLoaded);
     }
     
-    // Por fim carrega planta baixa
-    if (toLoad.floorPlan) {
-      loadFloorPlan(sceneData.files.floor_plan, checkAllLoaded);
+    // Carrega planta baixa (se disponível)
+    if (sceneData.files && sceneData.files.floorplan) {
+      totalToLoad++;
+      loadFloorPlan(sceneData.files.floorplan, checkAllLoaded);
+    } else if (sceneData.floorplan) {
+      totalToLoad++;
+      loadFloorPlan(sceneData.floorplan, checkAllLoaded);
     }
     
-    // Se não há nada para carregar, mostra um modelo básico
+    // Se não há nada para carregar, encerra o carregamento
     if (totalToLoad === 0) {
+      console.warn('Nenhum dado para carregar nesta cena');
       createBasicModel();
       showLoading(false);
       showMessage('Nenhum dado disponível para esta cena');
     }
+    
+    // Adiciona um timeout de segurança para sair do carregamento se algo der errado
+    setTimeout(() => {
+      if (isLoading()) {
+        console.warn('Timeout de carregamento - forçando saída do estado de carregamento');
+        showLoading(false);
+      }
+    }, 15000); // 15 segundos
   }
   
-  // Limpa a cena atual
+  // Função para limpar completamente a cena
   function clearScene() {
-    // Remove todos os objetos da cena, exceto luzes
-    for (let i = scene.children.length - 1; i >= 0; i--) {
-      const obj = scene.children[i];
-      if (obj.type === 'AmbientLight' || obj.type === 'DirectionalLight') {
-        continue;
+    // Remove todos os objetos 3D da cena
+    while (scene.children.length > 0) {
+      const object = scene.children[0];
+      
+      // Limpa geometrias e materiais para evitar vazamento de memória
+      if (object.geometry) {
+        object.geometry.dispose();
       }
-      scene.remove(obj);
+      
+      if (object.material) {
+        if (Array.isArray(object.material)) {
+          object.material.forEach(material => material.dispose());
+        } else {
+          object.material.dispose();
+        }
+      }
+      
+      scene.remove(object);
     }
     
-    // Limpa todas as variáveis de referência
+    // Limpa referências específicas
     panoramaSphere = null;
     currentPointCloud = null;
-    measurementLine = null;
-    measurementPreview = null;
+    
+    // Reseta medições
     measurementPoints = [];
+    if (measurementLine) {
+      if (measurementLine.geometry) measurementLine.geometry.dispose();
+      if (measurementLine.material) measurementLine.material.dispose();
+      measurementLine = null;
+    }
+    
+    if (measurementPreview) {
+      if (measurementPreview.geometry) measurementPreview.geometry.dispose();
+      if (measurementPreview.material) measurementPreview.material.dispose();
+      measurementPreview = null;
+    }
+    
+    // Limpa tags
+    tags = [];
+    
+    console.log('Cena limpa completamente');
   }
   
   // Reinicia todos os modos
@@ -446,11 +466,11 @@
     updateUIState();
   }
   
-  // Função para carregar panorâmicas (tanto equiretangulares quanto cubemaps)
+  // Função para carregar panorama estilo Matterport
   function loadPanorama(panoramaData, callback) {
     if (!panoramaData) {
-      console.warn('Dados de panorama não fornecidos');
-      if (callback) callback();
+      console.warn('Dados de panorama não fornecidos, carregando demo');
+      loadDemoPanorama(callback);
       return;
     }
     
@@ -469,18 +489,10 @@
       }
       panoramaSphere = null;
     }
-
+    
     // Garantir que a nuvem de pontos não esteja visível quando estiver no modo imersivo
     if (currentPointCloud && !isDollhouseMode) {
       currentPointCloud.visible = false;
-      console.log('Nuvem de pontos ocultada para modo imersivo');
-    }
-    
-    // Trata cubemap do TrueView
-    if (typeof panoramaData === 'object' && panoramaData.config) {
-      console.log('Carregando cubemap do TrueView:', panoramaData.config);
-      loadTrueViewPanorama(panoramaData, callback);
-      return;
     }
     
     // Carrega panorâmica equiretangular
@@ -488,188 +500,114 @@
     textureLoader.load(
       panoramaData,
       function(texture) {
-        // Cria esfera grande para a panorâmica
-        const geometry = new THREE.SphereGeometry(50, 64, 64);
-        // Inverte a geometria para ver de dentro
-        geometry.scale(-1, 1, 1);
-        
-        // Material com maior prioridade de renderização
+        // Criar material especial que privilegia a panorâmica
         const material = new THREE.MeshBasicMaterial({
           map: texture,
-          side: THREE.BackSide,
+          side: THREE.BackSide, // Renderiza do lado interno
+          transparent: false,
           depthWrite: false,
           depthTest: false
         });
         
-        // Cria a esfera da panorâmica
+        // Cria uma esfera invertida com tamanho adequado (menor que Matterport)
+        const geometry = new THREE.SphereGeometry(40, 64, 64);
+        
+        // Cria o Mesh
         panoramaSphere = new THREE.Mesh(geometry, material);
         panoramaSphere.name = 'panorama';
-        panoramaSphere.renderOrder = -1; // Renderiza antes de tudo
+        panoramaSphere.renderOrder = -1; // Renderiza antes de outros objetos
         
-        // Posiciona no centro correto
+        // Posiciona a esfera no centro da cena, ajustando à altura dos olhos
         if (currentSceneData && currentSceneData.center) {
           const floorLevel = detectFloorLevel();
           panoramaSphere.position.set(
             currentSceneData.center[0],
-            floorLevel + 1.6, // Altura dos olhos
+            floorLevel + 1.6, // Altura dos olhos (1.6m)
             currentSceneData.center[2]
           );
         }
         
+        // Adiciona a esfera à cena
         scene.add(panoramaSphere);
-        showMessage('Panorama carregado');
         
-        if (callback) callback();
-      },
-      function(xhr) {
-        const percent = Math.round((xhr.loaded / xhr.total) * 100);
-        showMessage(`Carregando panorama... ${percent}%`);
-      },
-      function(error) {
-        console.error('Erro ao carregar panorama:', error);
-        showMessage('Erro ao carregar panorama. Tentando alternativa...');
-        
-        // Tenta usar imagem demo como fallback
-        loadFallbackPanorama(callback);
-      }
-    );
-  }
-  
-  // Nova função para carregar panorâmicas do TrueView
-  function loadTrueViewPanorama(trueViewData, callback) {
-    // Primeiro, carregamos o arquivo de metadados (cubemapmeta)
-    fetch(trueViewData.config)
-      .then(response => {
-        if (!response.ok) {
-          throw new Error(`Erro ao carregar configuração: ${response.status}`);
+        // Atualiza a câmera para o centro da panorâmica e nível dos olhos
+        if (currentSceneData && currentSceneData.center) {
+          const floorLevel = detectFloorLevel();
+          const eyeHeight = floorLevel + 1.6; // Altura dos olhos
+          
+          // Posição da câmera no centro da panorâmica, altura dos olhos
+          camera.position.set(
+            currentSceneData.center[0],
+            eyeHeight,
+            currentSceneData.center[2]
+          );
+          
+          // Alvo dos controles ligeiramente à frente
+          controls.target.set(
+            currentSceneData.center[0],
+            eyeHeight,
+            currentSceneData.center[2] - 0.1 // Olhando um pouco para frente
+          );
+          
+          controls.update();
         }
-        return response.json();
-      })
-      .then(config => {
-        console.log('Config TrueView carregado:', config);
-        
-        // Obter caminhos para as imagens do cubemap
-        const baseFolder = trueViewData.folder;
-        const imageFiles = {
-          px: baseFolder + 'cubemap_right.jpg',
-          nx: baseFolder + 'cubemap_left.jpg',
-          py: baseFolder + 'cubemap_top.jpg',
-          ny: baseFolder + 'cubemap_bottom.jpg',
-          pz: baseFolder + 'cubemap_front.jpg',
-          nz: baseFolder + 'cubemap_back.jpg'
-        };
-        
-        // Obter posição da câmera, se disponível
-        let cameraPosition = null;
-        if (config.camera && config.camera.position) {
-          cameraPosition = [
-            config.camera.position.x,
-            config.camera.position.y,
-            config.camera.position.z
-          ];
-          console.log('Posição da câmera TrueView:', cameraPosition);
-        }
-        
-        // Carrega as texturas como cubemap
-        const loader = new THREE.CubeTextureLoader();
-        loader.setPath('');  // URLs já incluem o caminho completo
-        
-        loader.load([
-          imageFiles.px, imageFiles.nx,
-          imageFiles.py, imageFiles.ny,
-          imageFiles.pz, imageFiles.nz
-        ],
-        function(cubeTexture) {
-          // Cria geometria para a panorâmica
-          const geometry = new THREE.SphereGeometry(50, 64, 64);
-          geometry.scale(-1, 1, 1);  // Inverte para ver de dentro
-          
-          // Cria material para o cubemap
-          const material = new THREE.MeshBasicMaterial({
-            envMap: cubeTexture,
-            side: THREE.BackSide,
-            depthWrite: false,
-            depthTest: false
-          });
-          
-          // Cria a esfera
-          panoramaSphere = new THREE.Mesh(geometry, material);
-          panoramaSphere.name = 'panorama_cubemap';
-          panoramaSphere.renderOrder = -1;
-          
-          // Posiciona no centro (use coordenadas do TrueView se disponíveis)
-          if (cameraPosition) {
-            panoramaSphere.position.set(...cameraPosition);
-          } else if (currentSceneData && currentSceneData.center) {
-            const floorLevel = detectFloorLevel();
-            panoramaSphere.position.set(
-              currentSceneData.center[0],
-              floorLevel + 1.6,
-              currentSceneData.center[2]
-            );
-          }
-          
-          scene.add(panoramaSphere);
-          showMessage('Panorama TrueView carregado');
-          
-          if (callback) callback();
-        },
-        function(xhr) {
-          const percent = Math.round((xhr.loaded / xhr.total) * 100);
-          showMessage(`Carregando cubemap... ${percent}%`);
-        },
-        function(error) {
-          console.error('Erro ao carregar cubemap:', error);
-          showMessage('Erro ao carregar cubemap. Tentando alternativa...');
-          loadFallbackPanorama(callback);
-        });
-      })
-      .catch(error => {
-        console.error('Erro ao processar dados do TrueView:', error);
-        loadFallbackPanorama(callback);
-      });
-  }
-  
-  // Função para carregar uma panorâmica de fallback
-  function loadFallbackPanorama(callback) {
-    const demoUrl = '/demo_panorama.jpg';
-    
-    const textureLoader = new THREE.TextureLoader();
-    textureLoader.load(
-      demoUrl,
-      function(texture) {
-        const geometry = new THREE.SphereGeometry(50, 64, 64);
-        geometry.scale(-1, 1, 1);
-        
-        const material = new THREE.MeshBasicMaterial({
-          map: texture,
-          side: THREE.BackSide,
-          depthWrite: false,
-          depthTest: false
-        });
-        
-        panoramaSphere = new THREE.Mesh(geometry, material);
-        panoramaSphere.name = 'panorama_demo';
-        panoramaSphere.renderOrder = -1;
-        
-        scene.add(panoramaSphere);
-        showMessage('Panorama demo carregado');
         
         if (callback) callback();
       },
       undefined,
       function(error) {
-        console.error('Erro ao carregar panorama demo:', error);
-        if (callback) callback();
+        console.error('Erro ao carregar panorama:', error);
+        loadDemoPanorama(callback);
       }
     );
   }
   
-  // Carrega nuvem de pontos (formato PLY)
+  // Carrega panorama demo como fallback
+  function loadDemoPanorama(callback) {
+    console.log('Carregando panorama demo como fallback');
+    loadPanorama('/demo_panorama.jpg', callback);
+  }
+  
+  // Modifique a função navigateToScene para manter a consistência
+  function navigateToScene(sceneIndex) {
+    console.log(`Carregando cena Matterport-style:`, scenes[sceneIndex]);
+    currentSceneIndex = sceneIndex;
+    
+    // Efeito de fade para transição entre cenas
+    createFadeTransition();
+    
+    setTimeout(() => {
+      loadScene(scenes[sceneIndex]);
+    }, 400); // Tempo para o fade ocorrer
+  }
+  
+  // Modifique a função loadPointCloud para garantir que a nuvem seja carregada
   function loadPointCloud(cloudUrl, callback) {
     if (!cloudUrl) {
-      console.warn('URL de nuvem de pontos não fornecida');
-      if (callback) callback();
+      console.warn('URL de nuvem de pontos não fornecida, tentando alternativa');
+      
+      // Tenta caminhos alternativos para a nuvem de pontos
+      const sceneFolder = currentSceneData?.name?.toLowerCase() || 'scan';
+      const alternativePath = `/output/${sceneFolder}/output_cloud.ply`;
+      
+      console.log('Tentando carregar nuvem de backup:', alternativePath);
+      
+      // Tenta carregar a nuvem alternativa
+      const plyLoader = new THREE.PLYLoader();
+      plyLoader.load(
+        alternativePath,
+        function(geometry) {
+          // Processamento normal da nuvem
+          createPointCloud(geometry);
+          if (callback) callback();
+        },
+        undefined,
+        function(error) {
+          console.error('Erro ao carregar nuvem alternativa:', error);
+          if (callback) callback();
+        }
+      );
+      
       return;
     }
     
@@ -679,51 +617,11 @@
     plyLoader.load(
       cloudUrl,
       function(geometry) {
-        // Remove nuvem anterior
-        if (currentPointCloud) {
-          scene.remove(currentPointCloud);
-          currentPointCloud.geometry.dispose();
-          if (Array.isArray(currentPointCloud.material)) {
-            currentPointCloud.material.forEach(m => m.dispose());
-          } else if (currentPointCloud.material) {
-            currentPointCloud.material.dispose();
-          }
-        }
-        
-        // Corrige orientação
-        geometry.rotateY(Math.PI);
-        
-        // Otimize a geometria
-        geometry.computeBoundingSphere();
-        
-        // Use um tamanho menor de ponto para melhor performance
-        const pointMaterial = new THREE.PointsMaterial({
-          size: 0.01,
-          vertexColors: true,
-          sizeAttenuation: true,
-          transparent: true,
-          opacity: 0.8
-        });
-        
-        // Nova estratégia: Crie uma versão downsampled para melhor performance
-        const simplifiedGeometry = downsampleGeometry(geometry, 0.5); // 50% dos pontos
-        
-        currentPointCloud = new THREE.Points(simplifiedGeometry, pointMaterial);
-        currentPointCloud.name = 'point_cloud';
-        currentPointCloud.visible = isDollhouseMode;
-        
-        scene.add(currentPointCloud);
-        
-        // Detecta nível do piso
-        const floorLevel = detectFloorLevel();
-        console.log('Piso detectado em:', floorLevel);
-        
-        showMessage('Nuvem de pontos carregada');
+        createPointCloud(geometry);
         if (callback) callback();
       },
       function(xhr) {
-        const percent = Math.round((xhr.loaded / xhr.total) * 100);
-        showMessage(`Carregando nuvem de pontos... ${percent}%`);
+        console.log(`Nuvem: ${Math.round((xhr.loaded / xhr.total) * 100)}% carregada`);
       },
       function(error) {
         console.error('Erro ao carregar nuvem de pontos:', error);
@@ -732,53 +630,128 @@
     );
   }
   
-  // Nova função para reduzir a quantidade de pontos na nuvem
-  function downsampleGeometry(geometry, ratio) {
-    // Se a razão for 1 ou não houver posições, retorne a original
-    if (ratio >= 1 || !geometry.attributes.position) return geometry;
-    
-    // Obtenha os atributos originais
-    const positions = geometry.attributes.position;
-    const colors = geometry.attributes.color;
-    const vertexCount = positions.count;
-    
-    // Calcule quantos vértices manter
-    const keepCount = Math.max(100, Math.floor(vertexCount * ratio));
-    
-    // Crie novos buffers para os atributos
-    const newPositions = new Float32Array(keepCount * 3);
-    const newColors = colors ? new Float32Array(keepCount * 3) : null;
-    
-    // Amostragem estratificada - escolhe pontos em intervalos regulares
-    const stride = Math.floor(vertexCount / keepCount);
-    
-    for (let i = 0; i < keepCount; i++) {
-      const srcIdx = Math.min(i * stride, vertexCount - 1);
-      
-      // Copie a posição
-      newPositions[i * 3] = positions.array[srcIdx * 3];
-      newPositions[i * 3 + 1] = positions.array[srcIdx * 3 + 1];
-      newPositions[i * 3 + 2] = positions.array[srcIdx * 3 + 2];
-      
-      // Copie a cor, se existir
-      if (newColors && colors) {
-        newColors[i * 3] = colors.array[srcIdx * 3];
-        newColors[i * 3 + 1] = colors.array[srcIdx * 3 + 1];
-        newColors[i * 3 + 2] = colors.array[srcIdx * 3 + 2];
+  // Função auxiliar para criar a nuvem de pontos
+  function createPointCloud(geometry) {
+    // Remove nuvem anterior
+    if (currentPointCloud) {
+      scene.remove(currentPointCloud);
+      currentPointCloud.geometry.dispose();
+      if (Array.isArray(currentPointCloud.material)) {
+        currentPointCloud.material.forEach(m => m.dispose());
+      } else if (currentPointCloud.material) {
+        currentPointCloud.material.dispose();
       }
+      currentPointCloud = null;
     }
     
-    // Crie uma nova geometria
-    const newGeometry = new THREE.BufferGeometry();
-    newGeometry.setAttribute('position', new THREE.BufferAttribute(newPositions, 3));
-    
-    if (newColors) {
-      newGeometry.setAttribute('color', new THREE.BufferAttribute(newColors, 3));
+    try {
+      // Corrige orientação
+      geometry.rotateY(Math.PI);
+      
+      // Otimize a geometria
+      geometry.computeBoundingSphere();
+      
+      // Verifica se a geometria tem atributos válidos
+      if (!geometry.attributes.position) {
+        console.error('Geometria da nuvem de pontos não tem atributo de posição!');
+        return;
+      }
+      
+      console.log(`Nuvem carregada: ${geometry.attributes.position.count} pontos`);
+      
+      // Material para a nuvem de pontos
+      const pointMaterial = new THREE.PointsMaterial({
+        size: 0.008, // Tamanho menor para parecer mais com Matterport
+        vertexColors: geometry.attributes.color ? true : false,
+        sizeAttenuation: true,
+        transparent: true,
+        opacity: 0.75 // Mais transparente como no Matterport
+      });
+      
+      // Definindo cor padrão se não houver cores nos vértices
+      if (!geometry.attributes.color) {
+        pointMaterial.color.set(0xffffff);
+      }
+      
+      // Use downsampling apenas se tiver muitos pontos
+      let finalGeometry = geometry;
+      if (geometry.attributes.position.count > 500000) {
+        finalGeometry = downsampleGeometry(geometry, 0.25); // 25% dos pontos para performance
+      }
+      
+      currentPointCloud = new THREE.Points(finalGeometry, pointMaterial);
+      currentPointCloud.name = 'point_cloud';
+      currentPointCloud.visible = isDollhouseMode; // Visível apenas no modo dollhouse
+      
+      scene.add(currentPointCloud);
+      
+      // Detecta nível do piso
+      const floorLevel = detectFloorLevel();
+      console.log('Piso detectado em:', floorLevel);
+      
+      // Atualiza a interface
+      showMessage('Nuvem de pontos carregada');
+    } catch (error) {
+      console.error('Erro ao processar nuvem de pontos:', error);
     }
-    
-    console.log(`Reduzido de ${vertexCount} para ${keepCount} pontos (${Math.round(ratio * 100)}%)`);
-    
-    return newGeometry;
+  }
+  
+  // Corrija a função de downsampling para ser mais robusta
+  function downsampleGeometry(geometry, ratio) {
+    try {
+      // Se a razão for 1 ou não houver posições, retorne a original
+      if (ratio >= 1 || !geometry.attributes.position) return geometry;
+      
+      console.log(`Iniciando downsampling com ratio: ${ratio}`);
+      
+      // Obtenha os atributos originais
+      const positions = geometry.attributes.position;
+      const colors = geometry.attributes.color;
+      const vertexCount = positions.count;
+      
+      // Calcule quantos vértices manter
+      const keepCount = Math.max(100, Math.floor(vertexCount * ratio));
+      
+      console.log(`Downsampling: reduzindo de ${vertexCount} para ${keepCount} pontos`);
+      
+      // Crie novos buffers para os atributos
+      const newPositions = new Float32Array(keepCount * 3);
+      const newColors = colors ? new Float32Array(keepCount * 3) : null;
+      
+      // Use um método de amostragem simples
+      const step = Math.max(1, Math.floor(vertexCount / keepCount));
+      
+      let j = 0;
+      for (let i = 0; i < vertexCount && j < keepCount; i += step) {
+        // Copie a posição
+        newPositions[j * 3] = positions.array[i * 3];
+        newPositions[j * 3 + 1] = positions.array[i * 3 + 1];
+        newPositions[j * 3 + 2] = positions.array[i * 3 + 2];
+        
+        // Copie a cor, se existir
+        if (newColors && colors) {
+          newColors[j * 3] = colors.array[i * 3];
+          newColors[j * 3 + 1] = colors.array[i * 3 + 1];
+          newColors[j * 3 + 2] = colors.array[i * 3 + 2];
+        }
+        
+        j++;
+      }
+      
+      // Crie uma nova geometria
+      const newGeometry = new THREE.BufferGeometry();
+      newGeometry.setAttribute('position', new THREE.BufferAttribute(newPositions, 3));
+      
+      if (newColors) {
+        newGeometry.setAttribute('color', new THREE.BufferAttribute(newColors, 3));
+      }
+      
+      console.log(`Downsampling concluído: ${j} pontos`);
+      return newGeometry;
+    } catch (error) {
+      console.error("Erro no downsampling:", error);
+      return geometry; // Retorna a geometria original em caso de erro
+    }
   }
   
   // Função para criar um modelo 3D básico
@@ -1123,16 +1096,12 @@
   
   // Manipulador de movimento do mouse
   function onDocumentMouseMove(event) {
-    // Obtenha os objetos sob o cursor
-    const intersects = getIntersectedObjects(event);
+    // Atualiza coordenadas do mouse
+    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
     
-    // Atualiza o cursor conforme o objeto sob ele
-    updateCursorStyle(intersects);
-    
-    // Atualiza a pré-visualização da medição, se estiver medindo
-    if (isMeasuring && measurementPoints.length === 1) {
-      updateMeasurementPreview(intersects);
-    }
+    // Atualiza estado de hover
+    hovering = true;
   }
   
   // Atualiza o estilo do cursor com base no que está sob ele
@@ -1765,48 +1734,15 @@
     console.log('showLoading chamado com:', show);
     
     if (show) {
-      console.log('Mostrando tela de carregamento');
-      if (!loadingOverlay) {
-        console.error('Elemento loadingOverlay não encontrado!');
-        return;
-      }
-      
       loadingOverlay.style.display = 'flex';
       loadingOverlay.style.opacity = '1';
-      
-      // Timeout de segurança - após 8 segundos, remove a tela de carregamento
-      setTimeout(() => {
-        if (loadingOverlay.style.display === 'flex') {
-          console.warn('Timeout de carregamento - forçando saída do estado de carregamento');
-          loadingOverlay.style.opacity = '0';
-          setTimeout(() => {
-            loadingOverlay.style.display = 'none';
-            
-            // Verifica se já existe um objeto na cena, caso contrário cria uma demo
-            const existingObjects = scene.children.filter(child => 
-              child.type === 'Mesh' || child.type === 'Points'
-            );
-            
-            if (existingObjects.length === 0) {
-              console.log('Nenhum objeto na cena, criando demo');
-              createDemoScene();
-            } else {
-              console.log('Objetos existentes na cena:', existingObjects.length);
-            }
-          }, 500);
-        }
-      }, 8000);
+      console.log('Mostrando tela de carregamento');
     } else {
-      console.log('Escondendo tela de carregamento');
-      if (!loadingOverlay) {
-        console.error('Elemento loadingOverlay não encontrado!');
-        return;
-      }
-      
       loadingOverlay.style.opacity = '0';
       setTimeout(() => {
         loadingOverlay.style.display = 'none';
-      }, 500);
+      }, 500); // Espera a transição terminar
+      console.log('Escondendo tela de carregamento');
     }
   }
   
@@ -2125,6 +2061,100 @@
       document.body.removeChild(errorDiv);
       loadScenes();
     });
+  }
+
+  // Adicione esta função que está faltando (causando o erro atual)
+  function onKeyDown(event) {
+    // Se clicar no botão escape, sai do modo atual
+    if (event.key === 'Escape') {
+      if (isMeasuring || isTagMode) {
+        isMeasuring = false;
+        isTagMode = false;
+        updateUIState();
+        showMessage('Modo de interação desativado');
+      }
+    }
+  }
+
+  // Adicione esta função para processamento de interseções
+  function processIntersections(intersects) {
+    // Verifica se algum objeto foi interceptado
+    if (intersects.length > 0) {
+      const object = intersects[0].object;
+      
+      // Tratamento específico para diferentes tipos de objetos
+      if (object.userData && object.userData.type === 'navpoint') {
+        // Destaca ponto de navegação no hover
+        if (hoverState.mesh !== object) {
+          // Restaura o material anterior se houver
+          if (hoverState.mesh) {
+            hoverState.mesh.material.emissive.setHex(hoverState.originalColor);
+          }
+          
+          // Guarda informações do objeto atual
+          hoverState.mesh = object;
+          hoverState.originalColor = object.material.emissive.getHex();
+          
+          // Destaca o objeto
+          object.material.emissive.setHex(0x555555);
+        }
+      }
+    } else {
+      // Nenhum objeto sob o cursor, restaura aparência normal
+      if (hoverState.mesh) {
+        hoverState.mesh.material.emissive.setHex(hoverState.originalColor);
+        hoverState.mesh = null;
+      }
+    }
+  }
+
+  // Adicione estas variáveis que podem estar faltando
+  let lastFrameTime = 0;
+  let hovering = false;
+
+  // Adicione esta função para criar uma transição suave
+  function createFadeTransition() {
+    // Remove transição anterior, se existir
+    const existingOverlay = document.getElementById('fade-overlay');
+    if (existingOverlay) {
+      document.body.removeChild(existingOverlay);
+    }
+    
+    // Cria um novo overlay de fade
+    const fadeOverlay = document.createElement('div');
+    fadeOverlay.id = 'fade-overlay';
+    fadeOverlay.style.position = 'fixed';
+    fadeOverlay.style.top = '0';
+    fadeOverlay.style.left = '0';
+    fadeOverlay.style.width = '100%';
+    fadeOverlay.style.height = '100%';
+    fadeOverlay.style.backgroundColor = '#000';
+    fadeOverlay.style.opacity = '0';
+    fadeOverlay.style.transition = 'opacity 0.4s ease';
+    fadeOverlay.style.zIndex = '1000';
+    fadeOverlay.style.pointerEvents = 'none';
+    
+    document.body.appendChild(fadeOverlay);
+    
+    // Força um reflow para garantir que a transição funcione
+    fadeOverlay.offsetHeight;
+    
+    // Inicia a transição
+    fadeOverlay.style.opacity = '1';
+    
+    // Remove o overlay após a transição completa
+    setTimeout(() => {
+      if (fadeOverlay.parentNode) {
+        fadeOverlay.style.opacity = '0';
+        
+        // Remove o elemento após fade out
+        setTimeout(() => {
+          if (fadeOverlay.parentNode) {
+            document.body.removeChild(fadeOverlay);
+          }
+        }, 400);
+      }
+    }, 800);
   }
 
   console.log('main.js foi carregado e inicializado');

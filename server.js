@@ -512,3 +512,43 @@ function findTrueViewData(sceneName) {
   
   return null;
 }
+
+// Adicione ou modifique esta rota na sua API para verificar os caminhos
+app.get('/api/check-paths', (req, res) => {
+  const results = {
+    input: {
+      panorama: fs.existsSync(path.join(__dirname, 'input', 'panorama')),
+      trueview: fs.existsSync(path.join(__dirname, 'input', 'trueview'))
+    },
+    output: {
+      exists: fs.existsSync(path.join(__dirname, 'output')),
+      subdirs: []
+    },
+    demo: {
+      panorama: fs.existsSync(path.join(__dirname, 'public', 'demo_panorama.jpg'))
+    }
+  };
+  
+  // Verifica subdiretórios de output
+  if (results.output.exists) {
+    try {
+      const outputDirs = fs.readdirSync(path.join(__dirname, 'output'))
+        .filter(file => fs.statSync(path.join(__dirname, 'output', file)).isDirectory());
+      
+      outputDirs.forEach(dir => {
+        const dirPath = path.join(__dirname, 'output', dir);
+        const files = fs.readdirSync(dirPath);
+        
+        results.output.subdirs.push({
+          name: dir,
+          hasPointCloud: files.includes('output_cloud.ply'),
+          hasFloorPlan: files.includes('floor_plan.png')
+        });
+      });
+    } catch (error) {
+      console.error('Erro ao verificar diretórios output:', error);
+    }
+  }
+  
+  res.json(results);
+});
