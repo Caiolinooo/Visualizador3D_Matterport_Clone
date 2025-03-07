@@ -56,3 +56,8 @@ desktop.ini
 
 # Adicionar browser-tools-mcp
 browser-tools-mcp/
+
+# Arquivos específicos grandes
+input/panorama/Scan_001.jpg
+input/pts/scan.pts
+public/demo_panorama.jpg
