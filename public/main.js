@@ -160,9 +160,18 @@
       originalUpdate.call(this);
       
       if (!isDollhouseMode) {
-        // Mantém a altura da câmera igual à altura dos olhos
-        const floorLevel = detectFloorLevel();
-        camera.position.y = floorLevel + 1.6; // 1.6m = altura média dos olhos
+        try {
+          // Mantém a altura da câmera igual à altura dos olhos
+          const floorLevel = detectFloorLevel();
+          // Verifica se floorLevel é um número válido
+          if (typeof floorLevel === 'number' && !isNaN(floorLevel)) {
+            camera.position.y = floorLevel + 1.6; // 1.6m = altura média dos olhos
+          }
+        } catch (error) {
+          console.warn("Erro ao ajustar altura da câmera:", error);
+          // Mantém a altura padrão em caso de erro
+          camera.position.y = 1.6;
+        }
       }
     };
     
@@ -217,26 +226,31 @@
   function animate() {
     requestAnimationFrame(animate);
     
-    // Limitação de framerate para economizar recursos
-    const now = Date.now();
-    if (now - lastFrameTime < 16) { // Aproximadamente 60 FPS
-      return;
+    try {
+      // Limitação de framerate para economizar recursos
+      const now = Date.now();
+      if (now - lastFrameTime < 16) { // Aproximadamente 60 FPS
+        return;
+      }
+      lastFrameTime = now;
+      
+      // Atualiza os controles
+      controls.update();
+      
+      // Faz raycasting apenas quando necessário (hover, medição, etc)
+      // em vez de a cada frame
+      if (isMeasuring || isTagMode || hovering) {
+        raycaster.setFromCamera(mouse, camera);
+        const intersects = raycaster.intersectObjects(scene.children, true);
+        processIntersections(intersects);
+      }
+      
+      // Renderiza a cena
+      renderer.render(scene, camera);
+    } catch (error) {
+      console.warn("Erro no loop de animação:", error);
+      // Não interrompe o loop de animação em caso de erro
     }
-    lastFrameTime = now;
-    
-    // Atualiza os controles
-    controls.update();
-    
-    // Faz raycasting apenas quando necessário (hover, medição, etc)
-    // em vez de a cada frame
-    if (isMeasuring || isTagMode || hovering) {
-      raycaster.setFromCamera(mouse, camera);
-      const intersects = raycaster.intersectObjects(scene.children, true);
-      processIntersections(intersects);
-    }
-    
-    // Renderiza a cena
-    renderer.render(scene, camera);
   }
   
   // Ajuste ao redimensionar a janela
@@ -1868,9 +1882,18 @@
 
   // Adicione esta função para detectar o nível do piso automaticamente
   function detectFloorLevel() {
+    // Verifica se currentPointCloud existe
     if (!currentPointCloud) return 0;
     
-    const positions = currentPointCloud.geometry.getAttribute('position');
+    // Verifica se a geometria existe
+    if (!currentPointCloud.geometry) return 0;
+    
+    // Verifica se o atributo position existe
+    const positions = currentPointCloud.geometry.getAttribute ? 
+                      currentPointCloud.geometry.getAttribute('position') : null;
+    
+    // Se não há posições, retorna valor padrão
+    if (!positions || !positions.count) return 0;
     
     // Em vez de processar todos os pontos, usamos amostragem
     const sampleSize = Math.min(1000, positions.count);
@@ -1887,7 +1910,7 @@
     
     // Pega o valor de 5% mais baixo como nível do piso
     const floorIndex = Math.floor(yValues.length * 0.05);
-    return yValues[floorIndex];
+    return yValues[floorIndex] || 0; // Retorna 0 se o array estiver vazio
   }
 
   // Função para resetar a visualização para a posição inicial

@@ -211,6 +211,16 @@ Edite `process.py` para:
 - Abra as ferramentas de desenvolvedor do navegador para ver erros de JavaScript
 - Para problemas de processamento, execute o script Python com a flag `-v` para modo verboso
 
+### Problemas específicos no Windows
+
+- Para visualizar o JSON retornado pela API de forma formatada no PowerShell, utilize:
+
+  ```powershell
+  Invoke-RestMethod http://localhost:3000/api/matterport | ConvertTo-Json -Depth 10
+  ```
+
+- Caso apareça uma mensagem de erro relacionada a "EngineIntrinsics" ao executar comandos do Git (como "git remote set-url"), saiba que essa mensagem pode ser gerada pelo ambiente PowerShell. Recomendamos utilizar o Git Bash ou o Prompt de Comando (cmd) para evitar esse problema.
+
 ## 👥 Contribuição
 
 Contribuições são bem-vindas! Para contribuir:
