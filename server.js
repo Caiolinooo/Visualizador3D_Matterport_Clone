@@ -149,8 +149,8 @@ function findPanoramicImage(sceneDir, sceneName) {
 async function collectSceneData() {
   const scenes = [];
   const outputDir = path.join(__dirname, 'output');
-  const panoramaDir = path.join(__dirname, 'input', 'panorama');
-  const trueviewDir = path.join(__dirname, 'input', 'trueview');
+  const panoramaDir = path.join(__dirname, 'input_data', 'panorama');
+  const trueviewDir = path.join(__dirname, 'input_data', 'trueview');
   
   // Verifica se a pasta output existe
   if (!fs.existsSync(outputDir)) {
@@ -270,7 +270,7 @@ async function collectSceneData() {
   
   // Se não encontrou nenhuma cena processada, verifica se há arquivos PTS para processar
   if (scenes.length === 0) {
-    const ptsDir = path.join(__dirname, 'input', 'pts');
+    const ptsDir = path.join(__dirname, 'input_data', 'pts');
     if (fs.existsSync(ptsDir)) {
       const ptsFiles = fs.readdirSync(ptsDir)
         .filter(file => file.endsWith('.pts'));
@@ -434,7 +434,7 @@ function createDemoPanorama() {
 }
 
 // Chame essa função antes de iniciar o servidor
-// createDemoPanorama();
+createDemoPanorama();
 
 // Inicia o servidor - bind em 0.0.0.0 para garantir acessibilidade
 app.listen(PORT, '0.0.0.0', () => {
@@ -470,7 +470,7 @@ app.get('*', (req, res) => {
 
 // Adicione este helper para buscar dados do TrueView
 function findTrueViewData(sceneName) {
-  const trueviewDir = path.join(__dirname, 'input', 'trueview');
+  const trueviewDir = path.join(__dirname, 'input_data', 'trueview');
   if (!fs.existsSync(trueviewDir)) return null;
   
   try {
@@ -483,8 +483,8 @@ function findTrueViewData(sceneName) {
       
       if (configFile) {
         return {
-          config: `/input/trueview/${sceneName}/${configFile}`,
-          folder: `/input/trueview/${sceneName}/`
+          config: `/input_data/trueview/${sceneName}/${configFile}`,
+          folder: `/input_data/trueview/${sceneName}/`
         };
       }
     }
@@ -501,8 +501,8 @@ function findTrueViewData(sceneName) {
       
       if (configFile) {
         return {
-          config: `/input/trueview/${matchFolder}/${configFile}`,
-          folder: `/input/trueview/${matchFolder}/`
+          config: `/input_data/trueview/${matchFolder}/${configFile}`,
+          folder: `/input_data/trueview/${matchFolder}/`
         };
       }
     }

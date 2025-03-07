@@ -339,6 +339,7 @@
   // Carrega uma cena específica
   function loadScene(sceneData) {
     console.log('Carregando cena Matterport-style:', sceneData);
+    console.log('Arquivos disponíveis na cena:', JSON.stringify(sceneData.files, null, 2));
     showLoading(true);
     
     // Guarda referência à cena atual
@@ -348,65 +349,69 @@
     clearScene();
     
     // Quantos itens precisamos carregar (para rastrear progresso)
-    let totalToLoad = 0;
-    let loadedCount = 0;
+    const itemsToLoad = Object.keys(sceneData.files || {}).length;
+    let itemsLoaded = 0;
     
-    // Função para verificar se tudo foi carregado
-    function checkAllLoaded() {
-      loadedCount++;
-      console.log(`Item carregado (${loadedCount}/${totalToLoad})`);
-      
-      if (loadedCount >= totalToLoad) {
+    // Função para atualizar progresso
+    const updateProgress = () => {
+      itemsLoaded++;
+      const percent = Math.round((itemsLoaded / itemsToLoad) * 100);
+      showMessage(`Carregando cena: ${percent}%`);
+      if (itemsLoaded >= itemsToLoad) {
         showLoading(false);
-        showMessage('Cena carregada com sucesso');
-        
-        // Detecta o nível do piso
-        const floorLevel = detectFloorLevel();
-        console.log('Piso detectado em:', floorLevel);
-        
-        // Configura a câmera na posição de uma pessoa
-        if (sceneData.center) {
-          const center = sceneData.center;
-          // Posiciona a câmera na altura dos olhos relativa ao nível do piso
-          controls.target.set(center[0], floorLevel + 1.6, center[2] - 1); // Olha para frente
-          camera.position.set(center[0], floorLevel + 1.6, center[2]); // Altura dos olhos
-          controls.update();
-        }
-        
-        // Cria pontos de navegação para outras cenas
-        createNavigationPoints();
+        showMessage(`Cena "${sceneData.name}" carregada`);
       }
-    }
+    };
     
-    // Carrega panorama (se disponível)
+    // Carrega a panorâmica se disponível
     if (sceneData.files && sceneData.files.panorama) {
-      totalToLoad++;
-      loadPanorama(sceneData.files.panorama, checkAllLoaded);
-    } else if (sceneData.panorama) {
-      totalToLoad++;
-      loadPanorama(sceneData.panorama, checkAllLoaded);
+      console.log('Tentando carregar panorâmica:', sceneData.files.panorama);
+      loadPanorama(sceneData.files.panorama, () => {
+        console.log('Panorâmica carregada com sucesso');
+        updateProgress();
+      }, (error) => {
+        console.error('Erro ao carregar panorâmica:', error);
+        updateProgress();
+      });
+    } else if (sceneData.files && sceneData.files.cubemap) {
+      console.log('Tentando carregar cubemap:', sceneData.files.cubemap);
+      loadCubemap(sceneData.files.cubemap, () => {
+        console.log('Cubemap carregado com sucesso');
+        updateProgress();
+      }, (error) => {
+        console.error('Erro ao carregar cubemap:', error);
+        updateProgress();
+      });
+    } else {
+      console.warn('Nenhuma panorâmica ou cubemap disponível para esta cena');
     }
     
     // Carrega nuvem de pontos (se disponível)
-    if (sceneData.files && sceneData.files.pointcloud) {
-      totalToLoad++;
-      loadPointCloud(sceneData.files.pointcloud, checkAllLoaded);
-    } else if (sceneData.pointcloud) {
-      totalToLoad++;
-      loadPointCloud(sceneData.pointcloud, checkAllLoaded);
+    if (sceneData.files && sceneData.files.cloud) {
+      console.log('Tentando carregar nuvem de pontos:', sceneData.files.cloud);
+      loadPointCloud(sceneData.files.cloud, () => {
+        console.log('Nuvem de pontos carregada com sucesso');
+        updateProgress();
+      }, (error) => {
+        console.error('Erro ao carregar nuvem de pontos:', error);
+        updateProgress();
+      });
     }
     
     // Carrega planta baixa (se disponível)
-    if (sceneData.files && sceneData.files.floorplan) {
-      totalToLoad++;
-      loadFloorPlan(sceneData.files.floorplan, checkAllLoaded);
-    } else if (sceneData.floorplan) {
-      totalToLoad++;
-      loadFloorPlan(sceneData.floorplan, checkAllLoaded);
+    if (sceneData.files && sceneData.files.floor_plan) {
+      console.log('Tentando carregar planta baixa:', sceneData.files.floor_plan);
+      loadFloorPlan(sceneData.files.floor_plan, () => {
+        console.log('Planta baixa carregada com sucesso');
+        updateProgress();
+      }, (error) => {
+        console.error('Erro ao carregar planta baixa:', error);
+        updateProgress();
+      });
     }
     
     // Se não há nada para carregar, encerra o carregamento
-    if (totalToLoad === 0) {
+    if (itemsToLoad === 0) {
       console.warn('Nenhum dado para carregar nesta cena');
       createBasicModel();
       showLoading(false);
@@ -481,10 +486,10 @@
   }
   
   // Função para carregar panorama estilo Matterport
-  function loadPanorama(panoramaData, callback) {
+  function loadPanorama(panoramaData, callback, errorCallback) {
     if (!panoramaData) {
       console.warn('Dados de panorama não fornecidos, carregando demo');
-      loadDemoPanorama(callback);
+      loadDemoPanorama(callback, errorCallback);
       return;
     }
     
@@ -571,15 +576,49 @@
       undefined,
       function(error) {
         console.error('Erro ao carregar panorama:', error);
-        loadDemoPanorama(callback);
+        if (errorCallback) {
+          errorCallback(error);
+        } else {
+          loadDemoPanorama(callback, errorCallback);
+        }
       }
     );
   }
   
   // Carrega panorama demo como fallback
-  function loadDemoPanorama(callback) {
+  function loadDemoPanorama(callback, errorCallback) {
     console.log('Carregando panorama demo como fallback');
-    loadPanorama('/demo_panorama.jpg', callback);
+    const textureLoader = new THREE.TextureLoader();
+    textureLoader.load(
+      '/demo_panorama.jpg',
+      function(texture) {
+        const material = new THREE.MeshBasicMaterial({
+          map: texture,
+          side: THREE.BackSide,
+          transparent: false,
+          depthWrite: false,
+          depthTest: false
+        });
+        
+        const geometry = new THREE.SphereGeometry(40, 64, 64);
+        panoramaSphere = new THREE.Mesh(geometry, material);
+        panoramaSphere.name = 'panorama_demo';
+        panoramaSphere.renderOrder = -1;
+        
+        scene.add(panoramaSphere);
+        
+        if (callback) callback();
+      },
+      undefined,
+      function(error) {
+        console.error('Erro ao carregar panorama demo:', error);
+        if (errorCallback) errorCallback(error);
+        
+        // Criamos um modelo básico para mostrar mesmo sem panorâmica
+        createBasicModel();
+        if (callback) callback();
+      }
+    );
   }
   
   // Modifique a função navigateToScene para manter a consistência
