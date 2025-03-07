@@ -360,6 +360,12 @@
       if (itemsLoaded >= itemsToLoad) {
         showLoading(false);
         showMessage(`Cena "${sceneData.name}" carregada`);
+        
+        // Após carregar a cena, cria pontos de navegação para outras cenas
+        if (scenes && scenes.length > 1) {
+          console.log('Criando pontos de navegação entre cenas');
+          createNavigationPoints();
+        }
       }
     };
     
@@ -509,9 +515,13 @@
       panoramaSphere = null;
     }
     
-    // Garantir que a nuvem de pontos não esteja visível quando estiver no modo imersivo
-    if (currentPointCloud && !isDollhouseMode) {
-      currentPointCloud.visible = false;
+    // No modo panorâmico, a nuvem pode ser visível com transparência para orientação
+    if (currentPointCloud) {
+      currentPointCloud.visible = true;
+      // Ajusta a transparência para ser mais sutil em modo panorâmico
+      if (currentPointCloud.material) {
+        currentPointCloud.material.opacity = 0.3;
+      }
     }
     
     // Carrega panorâmica equiretangular
@@ -2049,25 +2059,36 @@
 
   // Adicione esta função que está faltando - causando o erro handleNavPointClick
   function handleNavPointClick(event) {
-    // Calcula coordenadas normalizadas do mouse (-1 a 1)
+    console.log('Processando clique para navegação');
+    // Converte coordenadas do mouse para coordenadas normalizadas (-1 a 1)
     mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
     mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
     
-    // Atualiza o raycaster com a posição do mouse
+    // Configura o raycaster
     raycaster.setFromCamera(mouse, camera);
     
-    // Obtém objetos que intersectam com o raio
+    // Encontra objetos que intersectam com o raio
     const intersects = raycaster.intersectObjects(scene.children, true);
     
-    // Verifica se algum ponto de navegação foi clicado
+    console.log('Objetos intersectados:', intersects.length);
+    
+    // Verifica se clicou em algum ponto de navegação
     for (let i = 0; i < intersects.length; i++) {
       const object = intersects[i].object;
+      
+      console.log('Verificando objeto:', object.name, object.userData);
+      
+      // Verifica se é um ponto de navegação
       if (object.userData && object.userData.type === 'navpoint') {
-        console.log(`Ponto de navegação clicado: ${object.userData.name}`);
+        console.log('Ponto de navegação encontrado, navegando para:', object.userData.targetScene);
+        
+        // Navega para a cena alvo
         navigateToScene(object.userData.targetScene);
-        return;
+        return true;
       }
     }
+    
+    return false;
   }
 
   // Nova função para mostrar tela vazia com instruções

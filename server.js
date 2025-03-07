@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import xml2js from 'xml2js';
 import cors from 'cors';
+import { createCanvas } from 'canvas';
 
 // Obter o __dirname equivalente quando usando ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -24,6 +25,9 @@ app.use('/output', express.static('output'));
 
 // Permite acesso aos arquivos de input_data (panoramas, scans, etc.)
 app.use('/input_data', express.static('input_data'));
+
+// Permite acesso aos arquivos de input (panoramas, scans, etc.)
+app.use('/input', express.static('input'));
 
 // Estrutura para armazenar cache de dados
 const dataCache = {
@@ -149,8 +153,8 @@ function findPanoramicImage(sceneDir, sceneName) {
 async function collectSceneData() {
   const scenes = [];
   const outputDir = path.join(__dirname, 'output');
-  const panoramaDir = path.join(__dirname, 'input_data', 'panorama');
-  const trueviewDir = path.join(__dirname, 'input_data', 'trueview');
+  const panoramaDir = path.join(__dirname, 'input', 'panorama');
+  const trueviewDir = path.join(__dirname, 'input', 'trueview');
   
   // Verifica se a pasta output existe
   if (!fs.existsSync(outputDir)) {
@@ -219,6 +223,18 @@ async function collectSceneData() {
             .filter(file => (file.endsWith('.jpg') || file.endsWith('.png')) && 
                            file.toLowerCase().includes(folder.toLowerCase()));
           
+          // Se não encontrou, tenta remover o prefixo '__' do nome da pasta
+          if (panoramaFiles.length === 0 && folder.startsWith('__')) {
+            const scanName = folder.substring(2); // Remove o prefixo '__'
+            const scanPanoramaFiles = fs.readdirSync(panoramaDir)
+              .filter(file => (file.endsWith('.jpg') || file.endsWith('.png')) && 
+                             file.toLowerCase().includes(scanName.toLowerCase()));
+            
+            if (scanPanoramaFiles.length > 0) {
+              scene.files.panorama = `/input/panorama/${scanPanoramaFiles[0]}`;
+              console.log(`Panorama encontrado para ${folder} usando nome sem prefixo: ${scanPanoramaFiles[0]}`);
+            }
+          } else 
           if (panoramaFiles.length > 0) {
             scene.files.panorama = `/input/panorama/${panoramaFiles[0]}`;
             console.log(`Panorama correspondente para ${folder}: ${panoramaFiles[0]}`);
@@ -355,10 +371,6 @@ createDemoData();
 
 // Adicione esta função para criar uma imagem demo diretamente
 function createDemoPanorama() {
-  const fs = require('fs');
-  const path = require('path');
-  const { createCanvas } = require('canvas');
-  
   // Caminho para o arquivo de saída
   const outputPath = path.join(__dirname, 'public', 'demo_panorama.jpg');
   
