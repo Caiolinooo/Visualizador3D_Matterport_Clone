@@ -195,7 +195,18 @@
       if (isMeasuring) {
         handleMeasurementClick(event);
       } else if (isTagMode) {
-        handleTagAddition(event); // Corrigir para chamar handleTagAddition em vez de handleTagClick
+        // Processa o evento do mouse corretamente antes de chamar handleTagAddition
+        mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+        mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+        
+        // Configura o raycaster
+        raycaster.setFromCamera(mouse, camera);
+        
+        // Calcula intersecções
+        const intersects = raycaster.intersectObjects(scene.children, true);
+        
+        // Agora chama com as intersecções calculadas
+        handleTagAddition(intersects);
       } else {
         handleNavPointClick(event);
       }
@@ -228,9 +239,25 @@
     // Adiciona botão para alternar entre modo unificado e cena única
     const unifiedButton = document.createElement('button');
     unifiedButton.textContent = 'Alternar Modo Unificado';
-    unifiedButton.className = 'control-button';
+    unifiedButton.className = 'btn';
+    unifiedButton.title = 'Alternar Modo Unificado';
+    unifiedButton.innerHTML = '🌐'; // Ícone de globo para modo unificado
     unifiedButton.addEventListener('click', toggleUnifiedMode);
-    document.getElementById('controls').appendChild(unifiedButton);
+
+    // Tentar encontrar o elemento de controle-panel
+    const controlPanel = document.querySelector('.control-panel');
+    if (controlPanel) {
+      // Se a control-panel existe, adiciona o botão diretamente a ela
+      controlPanel.appendChild(unifiedButton);
+    } else {
+      // Se não existe um painel de controle, cria um div para o botão
+      const controlsDiv = document.createElement('div');
+      controlsDiv.id = 'controls';
+      controlsDiv.className = 'control-panel custom-controls';
+      controlsDiv.style.cssText = 'position:absolute; bottom:80px; left:50%; transform:translateX(-50%);';
+      controlsDiv.appendChild(unifiedButton);
+      document.body.appendChild(controlsDiv);
+    }
   }
   
   // Loop de animação
@@ -349,6 +376,14 @@
   
   // Carrega uma cena específica
   function loadScene(sceneData) {
+    // Verifica se os dados da cena são válidos antes de prosseguir
+    if (!sceneData) {
+      console.warn("Tentativa de carregar cena com dados nulos ou undefined");
+      showMessage("Erro: Tentativa de carregar cena inválida");
+      showLoading(false);
+      return;
+    }
+    
     console.log('Carregando cena Matterport-style:', sceneData);
     console.log('Arquivos disponíveis na cena:', JSON.stringify(sceneData.files, null, 2));
     showLoading(true);
