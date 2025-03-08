@@ -195,7 +195,7 @@
       if (isMeasuring) {
         handleMeasurementClick(event);
       } else if (isTagMode) {
-        handleTagClick(event);
+        handleTagAddition(event); // Corrigir para chamar handleTagAddition em vez de handleTagClick
       } else {
         handleNavPointClick(event);
       }
@@ -2234,6 +2234,112 @@
         cloud.visible = (index === currentSceneIndex);
       });
     }
+  }
+
+  // Adicione esta função de volta ao código - é necessária para o controle da câmera
+  function detectFloorLevel() {
+    // Verifica se currentPointCloud existe
+    if (!currentPointCloud) return 0;
+    
+    // Verifica se a geometria existe
+    if (!currentPointCloud.geometry) return 0;
+    
+    // Verifica se o atributo position existe
+    const positions = currentPointCloud.geometry.getAttribute ? 
+                      currentPointCloud.geometry.getAttribute('position') : null;
+    
+    // Se não há posições, retorna valor padrão
+    if (!positions || !positions.count) return 0;
+    
+    // Em vez de processar todos os pontos, usamos amostragem
+    const sampleSize = Math.min(1000, positions.count);
+    const step = Math.floor(positions.count / sampleSize);
+    
+    let yValues = [];
+    
+    for (let i = 0; i < positions.count; i += step) {
+      yValues.push(positions.getY(i));
+    }
+    
+    // Ordena os valores de Y
+    yValues.sort((a, b) => a - b);
+    
+    // Pega o valor de 5% mais baixo como nível do piso
+    const floorIndex = Math.floor(yValues.length * 0.05);
+    return yValues[floorIndex] || 0; // Retorna 0 se o array estiver vazio
+  }
+
+  // Adicione esta função de volta ao código - é necessária para o botão de reset
+  function resetView() {
+    const floorLevel = detectFloorLevel();
+    const centerScene = currentSceneData?.center || [0, 0, 0];
+    
+    // Posição padrão: altura dos olhos, olhando para frente
+    const targetPos = new THREE.Vector3(centerScene[0], floorLevel + 1.6, centerScene[2]);
+    const targetTarget = new THREE.Vector3(centerScene[0], floorLevel + 1.6, centerScene[2] - 1);
+    
+    animateCameraMovement(camera.position, targetPos, controls.target, targetTarget, 1000);
+    
+    showMessage('Visualização resetada');
+  }
+
+  // Adicione esta função de volta ao código - é necessária para a animação de câmera
+  function animateCameraMovement(startPos, endPos, startTarget, endTarget, duration) {
+    const startTime = Date.now();
+    
+    function animate() {
+      const now = Date.now();
+      const elapsed = now - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      
+      // Função de easing para movimento mais natural
+      const easeProgress = 1 - Math.pow(1 - progress, 3);
+      
+      // Interpola posição da câmera
+      camera.position.lerpVectors(startPos, endPos, easeProgress);
+      
+      // Interpola alvo dos controles
+      controls.target.lerpVectors(startTarget, endTarget, easeProgress);
+      controls.update();
+      
+      // Continua a animação se não terminou
+      if (progress < 1) {
+        requestAnimationFrame(animate);
+      }
+    }
+    
+    animate();
+  }
+
+  // Adicione esta função de volta ao código - é necessária para criar textos flutuantes
+  function createTextSprite(message) {
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    canvas.width = 256;
+    canvas.height = 128;
+    
+    context.font = "Bold 24px Arial";
+    context.fillStyle = "rgba(255,255,255,0.95)";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    
+    context.fillStyle = "rgba(0,0,0,0.8)";
+    context.textAlign = "center";
+    context.fillText(message, canvas.width / 2, canvas.height / 2);
+    
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    
+    const spriteMaterial = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false
+    });
+    
+    const sprite = new THREE.Sprite(spriteMaterial);
+    sprite.scale.set(2, 1, 1);
+    
+    return sprite;
   }
 
   console.log('main.js foi carregado e inicializado');
