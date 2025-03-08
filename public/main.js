@@ -268,6 +268,26 @@
     document.getElementById('btn-tour').addEventListener('click', toggleAutoTour);
     document.getElementById('btn-reset').addEventListener('click', resetView);
     
+    // Busca o painel de controle uma única vez
+    const controlPanel = document.querySelector('.control-panel');
+    
+    // Adiciona o botão voltar ao painel de controle
+    if (controlPanel) {
+      // Cria o botão voltar
+      const backButton = document.createElement('button');
+      backButton.id = 'back-button';
+      backButton.className = 'btn disabled';
+      backButton.title = 'Voltar para a cena anterior';
+      backButton.innerHTML = '⬅️'; // Emoji de seta para esquerda
+      backButton.disabled = true; // Inicia desabilitado
+      backButton.addEventListener('click', navigateBack);
+      
+      // Insere o botão no início do painel
+      controlPanel.insertBefore(backButton, controlPanel.firstChild);
+    } else {
+      console.warn('Painel de controle não encontrado para adicionar botão voltar');
+    }
+    
     // Atualizando estado inicial da UI
     updateUIState();
     
@@ -281,19 +301,21 @@
     unifiedButton.innerHTML = '🌐'; // Ícone de globo para modo unificado
     unifiedButton.addEventListener('click', toggleUnifiedMode);
 
-    // Tentar encontrar o elemento de controle-panel
-    const controlPanel = document.querySelector('.control-panel');
+    // Usa o painel de controle já encontrado
     if (controlPanel) {
       // Se a control-panel existe, adiciona o botão diretamente a ela
       controlPanel.appendChild(unifiedButton);
     } else {
       // Se não existe um painel de controle, cria um div para o botão
-      const controlsDiv = document.createElement('div');
-      controlsDiv.id = 'controls';
-      controlsDiv.className = 'control-panel custom-controls';
-      controlsDiv.style.cssText = 'position:absolute; bottom:80px; left:50%; transform:translateX(-50%);';
-      controlsDiv.appendChild(unifiedButton);
-      document.body.appendChild(controlsDiv);
+      const buttonContainer = document.createElement('div');
+      buttonContainer.className = 'unified-mode-container';
+      buttonContainer.style.position = 'absolute';
+      buttonContainer.style.top = '10px';
+      buttonContainer.style.right = '10px';
+      buttonContainer.style.zIndex = '100';
+      
+      buttonContainer.appendChild(unifiedButton);
+      document.body.appendChild(buttonContainer);
     }
   }
   
@@ -608,7 +630,7 @@
     updateUIState();
   }
   
-  // Função para carregar panorama estilo Matterport
+  // Função melhorada para carregar panorama estilo Matterport
   function loadPanorama(panoramaData, callback, errorCallback) {
     if (!panoramaData) {
       console.warn('Dados de panorama não fornecidos, carregando demo');
@@ -632,49 +654,73 @@
       panoramaSphere = null;
     }
     
+    // Ajusta a visibilidade e a transparência da nuvem de pontos
     // No modo panorâmico, a nuvem pode ser visível com transparência para orientação
-    if (currentPointCloud) {
-      currentPointCloud.visible = true;
-      // Ajusta a transparência para ser mais sutil em modo panorâmico
-      if (currentPointCloud.material) {
-        currentPointCloud.material.opacity = 0.3;
-      }
+    if (pointClouds && pointClouds.length > 0) {
+      pointClouds.forEach(cloud => {
+        // Ajusta a transparência para ser mais sutil em modo panorâmico
+        if (cloud.material) {
+          cloud.material.opacity = 0.15; // Mais transparente em modo panorâmico
+          cloud.material.visible = true;
+        }
+      });
     }
     
-    // Carrega panorâmica equiretangular
+    // Carrega panorâmica equiretangular com HDR para melhor qualidade
     const textureLoader = new THREE.TextureLoader();
     textureLoader.load(
       panoramaData,
       function(texture) {
-        // Criar material especial que privilegia a panorâmica
+        // Aplicar correções para melhor qualidade visual
+        texture.minFilter = THREE.LinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+        texture.format = THREE.RGBAFormat;
+        
+        // Aumentar a nitidez da textura
+        texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        
+        // Ajustar gamma para cores mais naturais
+        texture.encoding = THREE.sRGBEncoding;
+        
+        // Criar material especial para a panorâmica com estilo Matterport
         const material = new THREE.MeshBasicMaterial({
           map: texture,
-          side: THREE.BackSide, // Renderiza do lado interno
+          side: THREE.BackSide,
           transparent: false,
           depthWrite: false,
           depthTest: false
         });
         
-        // Cria uma esfera invertida com tamanho adequado
-        const geometry = new THREE.SphereGeometry(15, 64, 64);
+        // Cria uma esfera para a panorâmica com tamanho adequado
+        // Raio maior para detalhe e qualidade
+        const geometry = new THREE.SphereGeometry(20, 128, 64);
         
         // Cria o Mesh
         panoramaSphere = new THREE.Mesh(geometry, material);
         panoramaSphere.name = 'panorama';
         panoramaSphere.renderOrder = -1; // Renderiza antes de outros objetos
+        panoramaSphere.rotation.y = Math.PI; // Corrige orientação da panorâmica
         
-        // Posiciona a esfera exatamente no centro da cena atual
+        // Posiciona a esfera exatamente no centro da cena atual com altura apropriada
         if (currentSceneData && currentSceneData.center) {
           const center = currentSceneData.center;
-          panoramaSphere.position.set(center[0], center[1], center[2]);
-          console.log(`Panorâmica posicionada em: [${center.join(', ')}]`);
+          
+          // Detecta o nível do piso para posicionar na altura correta
+          const floorLevel = detectFloorLevel();
+          const eyeHeight = floorLevel + 1.6; // 1.6m é a altura média dos olhos
+          
+          panoramaSphere.position.set(center[0], eyeHeight, center[2]);
+          console.log(`Panorâmica posicionada em: [${center[0]}, ${eyeHeight}, ${center[2]}]`);
         }
         
         // Adiciona a esfera à cena
         scene.add(panoramaSphere);
         
-        // Posiciona a câmera no centro da panorâmica na altura dos olhos
-        positionCameraInScene(currentSceneData);
+        // Posiciona a câmera no centro da panorâmica e ajusta controles
+        positionCameraInPanorama();
+        
+        // Aplica efeito de correção de cor para maior realismo
+        applyPanoramaColorCorrection(panoramaSphere);
         
         if (callback) callback();
       },
@@ -689,14 +735,225 @@
       }
     );
   }
-  
-  // Carrega panorama demo como fallback
+
+  // Função para detectar o nível do piso baseado na nuvem de pontos
+  function detectFloorLevel() {
+    // Valor padrão caso não consigamos detectar
+    let floorLevel = 0;
+    
+    // Se temos nuvem de pontos, tentamos detectar o nível do piso
+    if (pointClouds && pointClouds.length > 0) {
+      let lowestPointsSum = 0;
+      let lowestPointsCount = 0;
+      let minY = Infinity;
+      
+      // Para cada nuvem de pontos
+      pointClouds.forEach(cloud => {
+        if (cloud && cloud.geometry && cloud.geometry.getAttribute) {
+          const positions = cloud.geometry.getAttribute('position');
+          
+          if (positions && positions.array) {
+            // Encontrar o ponto mais baixo
+            for (let i = 1; i < positions.array.length; i += 3) {
+              const y = positions.array[i];
+              if (y < minY) {
+                minY = y;
+              }
+            }
+            
+            // Calcular a média dos pontos próximos ao mínimo
+            // (consideramos pontos até 0.3m acima do mínimo como parte do piso)
+            for (let i = 1; i < positions.array.length; i += 3) {
+              const y = positions.array[i];
+              if (y < minY + 0.3) {
+                lowestPointsSum += y;
+                lowestPointsCount++;
+              }
+            }
+          }
+        }
+      });
+      
+      // Se encontramos pontos do piso, calculamos a média
+      if (lowestPointsCount > 0) {
+        floorLevel = lowestPointsSum / lowestPointsCount;
+        console.log(`Nível do piso detectado: ${floorLevel.toFixed(2)}m`);
+      } else if (minY !== Infinity) {
+        // Se não conseguimos calcular a média, usamos o ponto mais baixo
+        floorLevel = minY;
+        console.log(`Usando ponto mais baixo como nível do piso: ${floorLevel.toFixed(2)}m`);
+      }
+    }
+    
+    // Compatibilidade com versão anterior - verifica currentPointCloud também
+    if (currentPointCloud && floorLevel === 0) {
+      // Verifica se a geometria existe
+      if (currentPointCloud.geometry) {
+        // Verifica se o atributo position existe
+        const positions = currentPointCloud.geometry.getAttribute ? 
+                          currentPointCloud.geometry.getAttribute('position') : null;
+        
+        // Se há posições, usamos amostragem
+        if (positions && positions.count) {
+          const sampleSize = Math.min(1000, positions.count);
+          const step = Math.floor(positions.count / sampleSize);
+          
+          let yValues = [];
+          
+          for (let i = 0; i < positions.count; i += step) {
+            yValues.push(positions.getY(i));
+          }
+          
+          // Ordena os valores de Y
+          yValues.sort((a, b) => a - b);
+          
+          // Pega o valor de 5% mais baixo como nível do piso
+          const floorIndex = Math.floor(yValues.length * 0.05);
+          floorLevel = yValues[floorIndex] || 0;
+          console.log(`Nível do piso detectado pelo método alternativo: ${floorLevel.toFixed(2)}m`);
+        }
+      }
+    }
+    
+    // Se não detectamos nada (nenhuma nuvem de pontos), usamos 0 como padrão
+    if (floorLevel === Infinity || isNaN(floorLevel)) {
+      floorLevel = 0;
+      console.log('Não foi possível detectar o nível do piso. Usando 0m como padrão.');
+    }
+    
+    return floorLevel;
+  }
+
+  // Função para posicionar a câmera corretamente dentro da panorâmica
+  function positionCameraInPanorama() {
+    if (!panoramaSphere || !currentSceneData || !currentSceneData.center) return;
+    
+    // Obter o centro da panorâmica atual
+    const center = currentSceneData.center;
+    const panoramaPosition = panoramaSphere.position.clone();
+    
+    // Detecta o nível do piso para posicionar na altura correta
+    const floorLevel = detectFloorLevel();
+    const eyeHeight = floorLevel + 1.6; // 1.6m é a altura média dos olhos
+
+    // Posiciona a câmera exatamente no centro da panorâmica na altura dos olhos
+    camera.position.set(panoramaPosition.x, eyeHeight, panoramaPosition.z);
+    
+    // Define o ponto de visão inicial com base nas informações da cena
+    let lookAtTarget;
+    
+    // Se a cena tiver uma orientação padrão, use-a
+    if (currentSceneData.defaultView) {
+      const view = currentSceneData.defaultView;
+      lookAtTarget = new THREE.Vector3(
+        camera.position.x + view[0],
+        camera.position.y + view[1],
+        camera.position.z + view[2]
+      );
+    } else {
+      // Caso contrário, olhe para o norte (Z negativo como padrão)
+      lookAtTarget = new THREE.Vector3(
+        camera.position.x,
+        camera.position.y,
+        camera.position.z - 1
+      );
+    }
+    
+    // Configura os controles para olhar para o alvo
+    controls.target.copy(lookAtTarget);
+    
+    // Ajusta os limites dos controles para uma experiência semelhante ao Matterport
+    controls.minDistance = 0.1;
+    controls.maxDistance = 1.0; // Limita o zoom para evitar sair da panorâmica
+    controls.minPolarAngle = Math.PI * 0.05; // Aproximadamente 9 graus acima do horizonte
+    controls.maxPolarAngle = Math.PI * 0.95; // Aproximadamente 9 graus abaixo do horizonte
+    
+    // Ajusta a velocidade de rotação para uma experiência suave
+    controls.rotateSpeed = 0.5;
+    
+    // Desativa pan e ativa damping para movimento suave
+    controls.enablePan = false;
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.1;
+    
+    // Atualiza os controles
+    controls.update();
+    
+    console.log('Câmera posicionada no centro da panorâmica na altura dos olhos');
+  }
+
+  // Função para aplicar correção de cor à panorâmica para maior realismo
+  function applyPanoramaColorCorrection(panoramaSphere) {
+    if (!panoramaSphere || !panoramaSphere.material || !panoramaSphere.material.map) return;
+    
+    // Ajusta as propriedades do material para melhor aparência
+    const material = panoramaSphere.material;
+    
+    // Ajusta o contraste e saturação para cores mais vibrantes
+    if (!material.onBeforeCompile) {
+      material.onBeforeCompile = function(shader) {
+        // Adiciona uniforms para ajustes
+        shader.uniforms.brightness = { value: 1.05 };
+        shader.uniforms.contrast = { value: 1.1 };
+        shader.uniforms.saturation = { value: 1.15 };
+        
+        // Fragmento de shader para correção de cor
+        const colorCorrectionSnippet = `
+          uniform float brightness;
+          uniform float contrast;
+          uniform float saturation;
+          
+          vec3 adjustColors(vec3 color) {
+            // Ajuste de brilho
+            color *= brightness;
+            
+            // Ajuste de contraste
+            color = (color - 0.5) * contrast + 0.5;
+            
+            // Ajuste de saturação
+            float luminance = dot(color, vec3(0.299, 0.587, 0.114));
+            color = mix(vec3(luminance), color, saturation);
+            
+            return clamp(color, 0.0, 1.0);
+          }
+        `;
+        
+        // Insere o snippet antes da linha "void main()"
+        shader.fragmentShader = shader.fragmentShader.replace(
+          'void main() {',
+          colorCorrectionSnippet + '\nvoid main() {'
+        );
+        
+        // Substitui a linha que obtém a cor
+        shader.fragmentShader = shader.fragmentShader.replace(
+          'gl_FragColor = vec4( outgoingLight, diffuseColor.a );',
+          'gl_FragColor = vec4( adjustColors(outgoingLight), diffuseColor.a );'
+        );
+      };
+      
+      // Força atualização do material
+      material.needsUpdate = true;
+    }
+    
+    console.log('Correções de cor aplicadas à panorâmica');
+  }
+
+  // Carrega panorama demo como fallback, versão melhorada
   function loadDemoPanorama(callback, errorCallback) {
-    console.log('Carregando panorama demo como fallback');
+    console.log('Carregando panorama demo de alta qualidade como fallback');
     const textureLoader = new THREE.TextureLoader();
+    
+    // Tenta primeiro uma imagem de demo interna, depois uma externa se falhar
     textureLoader.load(
       '/demo_panorama.jpg',
       function(texture) {
+        // Aplicar as mesmas correções da função principal
+        texture.minFilter = THREE.LinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+        texture.format = THREE.RGBAFormat;
+        texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        texture.encoding = THREE.sRGBEncoding;
+        
         const material = new THREE.MeshBasicMaterial({
           map: texture,
           side: THREE.BackSide,
@@ -705,38 +962,56 @@
           depthTest: false
         });
         
-        const geometry = new THREE.SphereGeometry(40, 64, 64);
+        const geometry = new THREE.SphereGeometry(20, 128, 64);
         panoramaSphere = new THREE.Mesh(geometry, material);
         panoramaSphere.name = 'panorama_demo';
         panoramaSphere.renderOrder = -1;
+        panoramaSphere.rotation.y = Math.PI; // Corrige orientação
+        
+        // Posiciona na origem
+        panoramaSphere.position.set(0, 1.6, 0);
         
         scene.add(panoramaSphere);
+        
+        // Posiciona a câmera
+        camera.position.set(0, 1.6, 0);
+        controls.target.set(0, 1.6, -1);
+        controls.update();
+        
+        // Aplica correção de cor
+        applyPanoramaColorCorrection(panoramaSphere);
         
         if (callback) callback();
       },
       undefined,
       function(error) {
         console.error('Erro ao carregar panorama demo:', error);
-        if (errorCallback) errorCallback(error);
         
-        // Criamos um modelo básico para mostrar mesmo sem panorâmica
-        createBasicModel();
-        if (callback) callback();
+        // Última tentativa - cria um ambiente básico
+        console.log('Criando ambiente básico como última alternativa');
+        createBasicEnvironment();
+        
+        if (errorCallback) errorCallback(error);
+        else if (callback) callback();
       }
     );
   }
-  
-  // Modifique a função navigateToScene para manter a consistência
-  function navigateToScene(sceneIndex) {
-    console.log(`Carregando cena Matterport-style:`, scenes[sceneIndex]);
-    currentSceneIndex = sceneIndex;
+
+  // Cria um ambiente básico para visualização se não houver panorâmica
+  function createBasicEnvironment() {
+    // Cria um ambiente simples com gradiente de cor
+    scene.background = new THREE.Color(0x336699);
+    scene.fog = new THREE.FogExp2(0x336699, 0.025);
     
-    // Efeito de fade para transição entre cenas
-    createFadeTransition();
+    // Ajusta iluminação para visualizar os pontos
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+    scene.add(ambientLight);
     
-    setTimeout(() => {
-      loadScene(scenes[sceneIndex]);
-    }, 400); // Tempo para o fade ocorrer
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
+    dirLight.position.set(10, 10, 10);
+    scene.add(dirLight);
+    
+    console.log('Ambiente básico criado para visualização');
   }
   
   // Modificar loadPointCloud para incluir as coordenadas do centro da cena
@@ -756,67 +1031,34 @@
       function(geometry) {
         console.log(`Nuvem carregada: ${geometry.attributes.position.count} pontos`);
         
-        // Cria Material para os pontos - ajustando para melhor visualização
+        // Criar material para os pontos com estilo Matterport
         const material = new THREE.PointsMaterial({
-          size: 0.015, // Tamanho menor dos pontos para visualização mais precisa
+          size: 0.012, // Tamanho otimizado para melhor visualização
           vertexColors: true,
           transparent: true,
-          opacity: 0.85, // Um pouco de transparência para ver estruturas internas
-          depthWrite: false, // Ajuda a evitar artefatos visuais com pontos
-          sizeAttenuation: true, // Pontos mais distantes aparecem menores
+          opacity: 0.9, // Alta opacidade como no Matterport
+          depthWrite: false, 
+          sizeAttenuation: true,
           blending: THREE.NormalBlending
         });
         
-        // Verifica se há cores, senão cria cores baseadas na altura
-        if (!geometry.attributes.color || geometry.attributes.color.count === 0) {
-          console.log('Nuvem sem cores: gerando cores baseadas na altura');
-          
-          // Cria um atributo de cor
-          const positions = geometry.attributes.position.array;
-          const count = geometry.attributes.position.count;
-          const colors = new Float32Array(count * 3);
-          
-          // Encontra limites min/max de Y (altura)
-          let minY = Infinity;
-          let maxY = -Infinity;
-          
-          for (let i = 0; i < count; i++) {
-            const y = positions[i * 3 + 1];
-            minY = Math.min(minY, y);
-            maxY = Math.max(maxY, y);
-          }
-          
-          const range = maxY - minY;
-          
-          // Gera cores baseadas na altura (azul para baixo, verde para meio, vermelho para cima)
-          for (let i = 0; i < count; i++) {
-            const y = positions[i * 3 + 1];
-            const normalizedHeight = (y - minY) / range;
-            
-            // Esquema de cores estilo Matterport
-            if (normalizedHeight < 0.25) {
-              // Azul para áreas mais baixas (piso)
-              colors[i * 3] = 0.2;
-              colors[i * 3 + 1] = 0.4;
-              colors[i * 3 + 2] = 0.8;
-            } else if (normalizedHeight < 0.75) {
-              // Verde para áreas médias (móveis, objetos)
-              colors[i * 3] = 0.2;
-              colors[i * 3 + 1] = 0.8;
-              colors[i * 3 + 2] = 0.4;
-            } else {
-              // Vermelho/laranja para áreas altas (teto)
-              colors[i * 3] = 0.8;
-              colors[i * 3 + 1] = 0.4;
-              colors[i * 3 + 2] = 0.2;
-            }
-          }
-          
-          geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        // Otimizar a nuvem para performance
+        let finalGeometry = geometry;
+        if (geometry.attributes.position.count > 1000000) {
+          // Se tiver mais de 1 milhão de pontos, faz down-sampling
+          const decimationFactor = 0.5; // Mantém 50% dos pontos
+          console.log(`Otimizando nuvem de pontos: ${geometry.attributes.position.count} -> aproximadamente ${Math.floor(geometry.attributes.position.count * decimationFactor)} pontos`);
+          finalGeometry = downsamplePointCloud(geometry, decimationFactor);
+        }
+        
+        // Verifica se há cores, senão cria cores baseadas em classificação semântica
+        if (!finalGeometry.attributes.color || finalGeometry.attributes.color.count === 0) {
+          console.log('Nuvem sem cores: gerando cores baseadas em classificação semântica simulada');
+          generateSemanticColors(finalGeometry);
         }
         
         // Cria a nuvem de pontos
-        const pointCloud = new THREE.Points(geometry, material);
+        const pointCloud = new THREE.Points(finalGeometry, material);
         
         // Posiciona a nuvem de acordo com as coordenadas centrais da cena
         if (sceneCenter && Array.isArray(sceneCenter) && sceneCenter.length === 3) {
@@ -828,7 +1070,8 @@
         pointCloud.userData = {
           type: 'pointcloud',
           url: cloudUrl,
-          center: sceneCenter
+          center: sceneCenter,
+          pointCount: finalGeometry.attributes.position.count
         };
         
         // Adiciona à cena
@@ -843,16 +1086,17 @@
         // Atualiza visibilidade com base no modo atual
         updatePointCloudsVisibility();
         
-        // Piso detectado é importante para posicionar elementos
-        const floorLevel = detectFloorLevel();
-        console.log('Piso detectado em:', floorLevel);
+        // Ajusta limites da cena e controles
+        updateSceneBounds();
         
         if (callback) callback();
       },
+      // Progresso
       function(xhr) {
         const percent = Math.round((xhr.loaded / xhr.total) * 100);
         showMessage(`Nuvem: ${percent}% carregada`);
       },
+      // Erro
       function(error) {
         console.error('Erro ao carregar nuvem de pontos:', error);
         if (errorCallback) errorCallback(error);
@@ -860,127 +1104,208 @@
     );
   }
   
-  // Função auxiliar para criar a nuvem de pontos
-  function createPointCloud(geometry) {
-    // Remove nuvem anterior
-    if (currentPointCloud) {
-      scene.remove(currentPointCloud);
-      currentPointCloud.geometry.dispose();
-      if (Array.isArray(currentPointCloud.material)) {
-        currentPointCloud.material.forEach(m => m.dispose());
-      } else if (currentPointCloud.material) {
-        currentPointCloud.material.dispose();
-      }
-      currentPointCloud = null;
+  // Função para fazer down-sampling da nuvem de pontos
+  function downsamplePointCloud(geometry, factor) {
+    const originalPositions = geometry.attributes.position;
+    const count = originalPositions.count;
+    const targetCount = Math.floor(count * factor);
+    
+    // Criar novo buffer de posições
+    const positions = new Float32Array(targetCount * 3);
+    
+    // Criar buffer para cores, se existirem no original
+    let colors = null;
+    if (geometry.attributes.color) {
+      colors = new Float32Array(targetCount * 3);
     }
     
-    try {
-      // Corrige orientação
-      geometry.rotateY(Math.PI);
+    // Calcular stride para o down-sampling
+    const stride = Math.ceil(count / targetCount);
+    
+    // Selecionar pontos usando stride para manter a distribuição
+    let targetIndex = 0;
+    for (let i = 0; i < count; i += stride) {
+      if (targetIndex >= targetCount) break;
       
-      // Otimize a geometria
-      geometry.computeBoundingSphere();
+      // Copiar posição
+      positions[targetIndex * 3] = originalPositions.array[i * 3];
+      positions[targetIndex * 3 + 1] = originalPositions.array[i * 3 + 1];
+      positions[targetIndex * 3 + 2] = originalPositions.array[i * 3 + 2];
       
-      // Verifica se a geometria tem atributos válidos
-      if (!geometry.attributes.position) {
-        console.error('Geometria da nuvem de pontos não tem atributo de posição!');
-        return;
+      // Copiar cor, se existir
+      if (colors && geometry.attributes.color) {
+        colors[targetIndex * 3] = geometry.attributes.color.array[i * 3];
+        colors[targetIndex * 3 + 1] = geometry.attributes.color.array[i * 3 + 1];
+        colors[targetIndex * 3 + 2] = geometry.attributes.color.array[i * 3 + 2];
       }
       
-      console.log(`Nuvem carregada: ${geometry.attributes.position.count} pontos`);
-      
-      // Material para a nuvem de pontos
-      const pointMaterial = new THREE.PointsMaterial({
-        size: 0.008, // Tamanho menor para parecer mais com Matterport
-        vertexColors: geometry.attributes.color ? true : false,
-        sizeAttenuation: true,
-        transparent: true,
-        opacity: 0.75 // Mais transparente como no Matterport
-      });
-      
-      // Definindo cor padrão se não houver cores nos vértices
-      if (!geometry.attributes.color) {
-        pointMaterial.color.set(0xffffff);
-      }
-      
-      // Use downsampling apenas se tiver muitos pontos
-      let finalGeometry = geometry;
-      if (geometry.attributes.position.count > 500000) {
-        finalGeometry = downsampleGeometry(geometry, 0.25); // 25% dos pontos para performance
-      }
-      
-      currentPointCloud = new THREE.Points(finalGeometry, pointMaterial);
-      currentPointCloud.name = 'point_cloud';
-      currentPointCloud.visible = isDollhouseMode; // Visível apenas no modo dollhouse
-      
-      scene.add(currentPointCloud);
-      
-      // Detecta nível do piso
-      const floorLevel = detectFloorLevel();
-      console.log('Piso detectado em:', floorLevel);
-      
-      // Atualiza a interface
-      showMessage('Nuvem de pontos carregada');
-    } catch (error) {
-      console.error('Erro ao processar nuvem de pontos:', error);
+      targetIndex++;
     }
+    
+    // Criar nova geometria com o buffer reduzido
+    const newGeometry = new THREE.BufferGeometry();
+    newGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    
+    if (colors) {
+      newGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    }
+    
+    console.log(`Down-sampling concluído: ${count} -> ${targetIndex} pontos`);
+    return newGeometry;
   }
   
-  // Corrija a função de downsampling para ser mais robusta
-  function downsampleGeometry(geometry, ratio) {
-    try {
-      // Se a razão for 1 ou não houver posições, retorne a original
-      if (ratio >= 1 || !geometry.attributes.position) return geometry;
+  // Função para gerar cores baseadas em classificação semântica simulada
+  function generateSemanticColors(geometry) {
+    const positions = geometry.attributes.position.array;
+    const count = geometry.attributes.position.count;
+    const colors = new Float32Array(count * 3);
+    
+    // Encontrar limites min/max para classificação
+    let minY = Infinity, maxY = -Infinity;
+    let minX = Infinity, maxX = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
+    
+    for (let i = 0; i < count; i++) {
+      const x = positions[i * 3];
+      const y = positions[i * 3 + 1];
+      const z = positions[i * 3 + 2];
       
-      console.log(`Iniciando downsampling com ratio: ${ratio}`);
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+      minZ = Math.min(minZ, z);
+      maxZ = Math.max(maxZ, z);
+    }
+    
+    // Calcular delta para normalização
+    const rangeY = maxY - minY;
+    const rangeX = maxX - minX;
+    const rangeZ = maxZ - minZ;
+    
+    // Classificação e geração de cores no estilo Matterport
+    for (let i = 0; i < count; i++) {
+      const x = positions[i * 3];
+      const y = positions[i * 3 + 1];
+      const z = positions[i * 3 + 2];
       
-      // Obtenha os atributos originais
-      const positions = geometry.attributes.position;
-      const colors = geometry.attributes.color;
-      const vertexCount = positions.count;
+      // Normalizar posição
+      const normalizedY = (y - minY) / rangeY;
       
-      // Calcule quantos vértices manter
-      const keepCount = Math.max(100, Math.floor(vertexCount * ratio));
+      // Cores naturais baseadas na altura e posição 3D
       
-      console.log(`Downsampling: reduzindo de ${vertexCount} para ${keepCount} pontos`);
-      
-      // Crie novos buffers para os atributos
-      const newPositions = new Float32Array(keepCount * 3);
-      const newColors = colors ? new Float32Array(keepCount * 3) : null;
-      
-      // Use um método de amostragem simples
-      const step = Math.max(1, Math.floor(vertexCount / keepCount));
-      
-      let j = 0;
-      for (let i = 0; i < vertexCount && j < keepCount; i += step) {
-        // Copie a posição
-        newPositions[j * 3] = positions.array[i * 3];
-        newPositions[j * 3 + 1] = positions.array[i * 3 + 1];
-        newPositions[j * 3 + 2] = positions.array[i * 3 + 2];
+      // Identificar piso (pontos mais baixos)
+      if (normalizedY < 0.15) {
+        // Tons de marrom / bege para o piso, com variação baseada em X e Z
+        const xVar = ((x - minX) / rangeX) * 0.2;
+        const zVar = ((z - minZ) / rangeZ) * 0.2;
         
-        // Copie a cor, se existir
-        if (newColors && colors) {
-          newColors[j * 3] = colors.array[i * 3];
-          newColors[j * 3 + 1] = colors.array[i * 3 + 1];
-          newColors[j * 3 + 2] = colors.array[i * 3 + 2];
+        colors[i * 3] = 0.6 + xVar; // R - mais vermelho
+        colors[i * 3 + 1] = 0.5 + zVar; // G - mais verde
+        colors[i * 3 + 2] = 0.35; // B - pouco azul
+      }
+      // Identificar paredes (pontos de altura média)
+      else if (normalizedY < 0.85) {
+        // Variação de textura para as paredes
+        const textureVar = (Math.sin(x * 5) + Math.sin(z * 5)) * 0.05;
+        
+        // Tons de branco/cinza para paredes
+        colors[i * 3] = 0.82 + textureVar; // R
+        colors[i * 3 + 1] = 0.82 + textureVar; // G
+        colors[i * 3 + 2] = 0.85 + textureVar; // B
+        
+        // Adiciona variação para portas e janelas (detecção simplificada)
+        const distanceToEdge = Math.min(
+          Math.abs(x - minX), Math.abs(x - maxX),
+          Math.abs(z - minZ), Math.abs(z - maxZ)
+        );
+        
+        if (distanceToEdge < rangeX * 0.1 || distanceToEdge < rangeZ * 0.1) {
+          // Possíveis portas/janelas nas extremidades
+          if (Math.random() > 0.7) {
+            colors[i * 3] = 0.5; // R
+            colors[i * 3 + 1] = 0.5; // G
+            colors[i * 3 + 2] = 0.6; // B - mais azulado para janelas
+          }
+        }
+      }
+      // Identificar teto (pontos mais altos)
+      else {
+        // Cor para teto
+        colors[i * 3] = 0.95; // R
+        colors[i * 3 + 1] = 0.95; // G
+        colors[i * 3 + 2] = 0.95; // B - branco levemente acinzentado
+      }
+      
+      // Adicionar móveis e objetos (baseado em análises de densidade espacial simplificadas)
+      // Esta é uma detecção muito simplificada para simular móveis
+      if (normalizedY > 0.15 && normalizedY < 0.6) {
+        // Calcular densidade local em uma região pequena (simplificado)
+        let nearbyCount = 0;
+        const checkRadius = rangeX * 0.03; // 3% do tamanho da cena
+        
+        // Amostragem simples para verificar pontos próximos
+        for (let j = Math.max(0, i - 10); j < Math.min(count, i + 10); j++) {
+          const dx = positions[j * 3] - x;
+          const dy = positions[j * 3 + 1] - y;
+          const dz = positions[j * 3 + 2] - z;
+          const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+          
+          if (distance < checkRadius) {
+            nearbyCount++;
+          }
         }
         
-        j++;
+        // Se tiver muitos pontos próximos, considerar como um móvel
+        if (nearbyCount > 15) {
+          const rnd = Math.random();
+          
+          // Diferentes cores para diferentes tipos de móveis
+          if (rnd < 0.3) {
+            // Tons de marrom para móveis de madeira
+            colors[i * 3] = 0.5; // R
+            colors[i * 3 + 1] = 0.35; // G
+            colors[i * 3 + 2] = 0.2; // B
+          } else if (rnd < 0.6) {
+            // Tons de cinza para móveis estofados
+            colors[i * 3] = 0.4; // R
+            colors[i * 3 + 1] = 0.4; // G
+            colors[i * 3 + 2] = 0.45; // B
+          } else {
+            // Tons variados para outros objetos
+            colors[i * 3] = 0.3 + rnd * 0.3; // R
+            colors[i * 3 + 1] = 0.3 + rnd * 0.2; // G
+            colors[i * 3 + 2] = 0.3 + rnd * 0.4; // B
+          }
+        }
       }
+    }
+    
+    // Adicionar o atributo de cor à geometria
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    console.log('Cores semânticas geradas com sucesso');
+  }
+  
+  // Função para atualizar os limites da cena com base nas nuvens de pontos
+  function updateSceneBounds() {
+    if (!currentPointCloud) return;
+    
+    // Calcular bounding box da nuvem atual
+    currentPointCloud.geometry.computeBoundingBox();
+    const bbox = currentPointCloud.geometry.boundingBox;
+    
+    // Atualizar limites dos controles de câmera
+    if (controls) {
+      // Calcular tamanho da cena
+      const size = new THREE.Vector3();
+      bbox.getSize(size);
+      const maxDimension = Math.max(size.x, size.y, size.z);
       
-      // Crie uma nova geometria
-      const newGeometry = new THREE.BufferGeometry();
-      newGeometry.setAttribute('position', new THREE.BufferAttribute(newPositions, 3));
+      // Ajustar limites de zoom com base no tamanho da cena
+      controls.minDistance = maxDimension * 0.05; // Zoom máximo = 5% do tamanho da cena
+      controls.maxDistance = maxDimension * 3; // Zoom mínimo = 3x o tamanho da cena
       
-      if (newColors) {
-        newGeometry.setAttribute('color', new THREE.BufferAttribute(newColors, 3));
-      }
-      
-      console.log(`Downsampling concluído: ${j} pontos`);
-      return newGeometry;
-    } catch (error) {
-      console.error("Erro no downsampling:", error);
-      return geometry; // Retorna a geometria original em caso de erro
+      console.log(`Limites de câmera atualizados: zoom min=${controls.minDistance.toFixed(2)}, max=${controls.maxDistance.toFixed(2)}`);
     }
   }
   
@@ -1429,71 +1754,214 @@
     });
   }
   
-  // Navega para outra cena
+  // Navegação entre cenas com transições suaves
   function navigateToScene(sceneIndex) {
-    if (sceneIndex < 0 || sceneIndex >= scenes.length || sceneIndex === currentSceneIndex) {
+    if (sceneIndex < 0 || sceneIndex >= scenes.length) {
+      console.error(`Índice de cena inválido: ${sceneIndex}`);
       return;
     }
     
-    const targetScene = scenes[sceneIndex];
-    console.log(`Navegando para cena: ${targetScene.name}`);
+    // Evita navegação para a mesma cena
+    if (sceneIndex === currentSceneIndex && currentSceneData) {
+      console.log('Já estamos na cena selecionada');
+      return;
+    }
     
-    // Efeito de fade out/in para transição
-    fadeOut(() => {
-      // Carrega a nova cena
-      loadScene(targetScene);
-      currentSceneIndex = sceneIndex;
-      
-      // Quando a cena carregar, faz fade in
-      setTimeout(() => {
-        fadeIn();
+    console.log(`Navegando para cena: ${scenes[sceneIndex].name}`);
+    const previousSceneIndex = currentSceneIndex;
+    
+    // Atualiza o índice da cena atual
+    currentSceneIndex = sceneIndex;
+    
+    // Adiciona os parâmetros da cena à URL para compartilhamento
+    updateURLWithSceneInfo(sceneIndex);
+    
+    // Adiciona a cena ao histórico de navegação
+    addToNavigationHistory(sceneIndex);
+    
+    // Salva a posição da câmera para animar a transição
+    const startCameraPosition = camera.position.clone();
+    const startCameraTarget = controls.target.clone();
+    
+    // Efeito de fade para transição entre cenas
+    createFadeTransition().then(() => {
+      // Carrega a nova cena após o fade-out
+      loadScene(scenes[sceneIndex], () => {
+        // Após carregar, anima a transição da câmera
+        if (previousSceneIndex !== -1 && panoramaSphere) {
+          // Calcula a distância entre as cenas para determinar duração da animação
+          const previousCenter = scenes[previousSceneIndex].center || [0, 0, 0];
+          const currentCenter = scenes[sceneIndex].center || [0, 0, 0];
+          const distance = Math.sqrt(
+            Math.pow(previousCenter[0] - currentCenter[0], 2) +
+            Math.pow(previousCenter[1] - currentCenter[1], 2) +
+            Math.pow(previousCenter[2] - currentCenter[2], 2)
+          );
+          
+          // Duração baseada na distância (entre 800ms e 2000ms)
+          const duration = Math.min(Math.max(distance * 200, 800), 2000);
+          
+          // Anima a transição da câmera
+          animateCameraTransition(startCameraPosition, startCameraTarget, duration);
+          
+          console.log(`Transição suave entre cenas com duração: ${duration}ms`);
+        }
         
-        // Atualize a interface
-        updateUIState();
+        // Atualiza a lista de cenas no menu
+        populateScenesMenu(scenes);
         
-        // Atualiza a lista de cenas no sidebar para destacar a atual
-        populateScenesMenu(scenes); // Substitui updateScenesList por populateScenesMenu
-      }, 500);
+        // Destaca a cena atual na lista
+        highlightCurrentScene(sceneIndex);
+      });
     });
   }
   
-  // Adicione esta função para efeito fade out
-  function fadeOut(callback) {
-    const fadeOverlay = document.createElement('div');
-    fadeOverlay.style.position = 'fixed';
-    fadeOverlay.style.top = '0';
-    fadeOverlay.style.left = '0';
-    fadeOverlay.style.width = '100%';
-    fadeOverlay.style.height = '100%';
-    fadeOverlay.style.backgroundColor = 'black';
-    fadeOverlay.style.opacity = '0';
-    fadeOverlay.style.transition = 'opacity 0.5s';
-    fadeOverlay.style.zIndex = '1000';
-    document.body.appendChild(fadeOverlay);
-    
-    // Força o reflow para que a transição funcione
-    void fadeOverlay.offsetWidth;
-    
-    fadeOverlay.style.opacity = '1';
-    
-    setTimeout(() => {
-      if (callback) callback();
-      // Não remove o overlay ainda, será usado para o fade in
-    }, 500);
+  // Cria uma transição de fade entre cenas
+  function createFadeTransition() {
+    return new Promise((resolve) => {
+      // Cria um elemento DOM para o fade
+      let fadeElement = document.getElementById('scene-transition-fade');
+      
+      if (!fadeElement) {
+        fadeElement = document.createElement('div');
+        fadeElement.id = 'scene-transition-fade';
+        fadeElement.style.position = 'fixed';
+        fadeElement.style.top = '0';
+        fadeElement.style.left = '0';
+        fadeElement.style.width = '100%';
+        fadeElement.style.height = '100%';
+        fadeElement.style.backgroundColor = 'black';
+        fadeElement.style.opacity = '0';
+        fadeElement.style.transition = 'opacity 0.4s ease-in-out';
+        fadeElement.style.pointerEvents = 'none';
+        fadeElement.style.zIndex = '1000';
+        document.body.appendChild(fadeElement);
+      }
+      
+      // Fade out
+      fadeElement.style.opacity = '1';
+      
+      // Espera o fade out completar
+      setTimeout(() => {
+        // Fade in após carregar a cena
+        fadeElement.style.opacity = '0';
+        
+        // Resolve a promessa após o fade out
+        resolve();
+        
+        // Remove o elemento após o fade in completo
+        setTimeout(() => {
+          fadeElement.remove();
+        }, 400);
+      }, 400);
+    });
   }
   
-  // Adicione esta função para efeito fade in
-  function fadeIn() {
-    const fadeOverlay = document.querySelector('div[style*="position: fixed"][style*="z-index: 1000"]');
-    if (!fadeOverlay) return;
+  // Anima a transição da câmera entre cenas para um movimento suave
+  function animateCameraTransition(startPosition, startTarget, duration) {
+    if (!panoramaSphere) return;
     
-    fadeOverlay.style.opacity = '0';
+    const endPosition = panoramaSphere.position.clone();
+    endPosition.y = camera.position.y; // Mantém a altura atual
     
-    setTimeout(() => {
-      if (fadeOverlay.parentNode) {
-        fadeOverlay.parentNode.removeChild(fadeOverlay);
+    const endTarget = new THREE.Vector3(
+      endPosition.x, 
+      endPosition.y, 
+      endPosition.z - 1 // Olha para o "norte" como padrão
+    );
+    
+    const startTime = performance.now();
+    
+    function animate() {
+      const now = performance.now();
+      const elapsed = now - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      
+      // Easing suave para movimento natural
+      const easeProgress = 1 - Math.pow(1 - progress, 3);
+      
+      // Interpola posição e alvo da câmera
+      camera.position.lerpVectors(startPosition, endPosition, easeProgress);
+      controls.target.lerpVectors(startTarget, endTarget, easeProgress);
+      controls.update();
+      
+      if (progress < 1) {
+        requestAnimationFrame(animate);
+      } else {
+        // Terminou a animação, posicione corretamente na panorâmica
+        positionCameraInPanorama();
       }
-    }, 500);
+    }
+    
+    // Inicia a animação
+    animate();
+  }
+  
+  // Destaca a cena atual na lista do menu
+  function highlightCurrentScene(sceneIndex) {
+    const sceneItems = document.querySelectorAll('.scene-item');
+    
+    sceneItems.forEach((item, index) => {
+      if (index === sceneIndex) {
+        item.classList.add('active-scene');
+      } else {
+        item.classList.remove('active-scene');
+      }
+    });
+  }
+  
+  // Histórico de navegação para o botão voltar
+  let navigationHistory = [];
+  
+  // Adiciona uma cena ao histórico de navegação
+  function addToNavigationHistory(sceneIndex) {
+    // Evita duplicação da última posição no histórico
+    if (navigationHistory.length > 0 && navigationHistory[navigationHistory.length - 1] === sceneIndex) {
+      return;
+    }
+    
+    // Adiciona ao histórico
+    navigationHistory.push(sceneIndex);
+    
+    // Limita o histórico a 10 itens
+    if (navigationHistory.length > 10) {
+      navigationHistory.shift();
+    }
+    
+    // Atualiza o estado do botão voltar
+    updateBackButtonState();
+  }
+  
+  // Função para navegar para a cena anterior
+  function navigateBack() {
+    // Precisa ter pelo menos duas entradas no histórico para voltar
+    if (navigationHistory.length < 2) {
+      console.log('Não há histórico para voltar');
+      return;
+    }
+    
+    // Remove a entrada atual
+    navigationHistory.pop();
+    
+    // Obtém a última entrada
+    const previousSceneIndex = navigationHistory.pop();
+    
+    // Navega para a cena anterior
+    navigateToScene(previousSceneIndex);
+  }
+  
+  // Atualiza o estado do botão voltar
+  function updateBackButtonState() {
+    const backButton = document.getElementById('back-button');
+    if (backButton) {
+      if (navigationHistory.length > 1) {
+        backButton.disabled = false;
+        backButton.classList.remove('disabled');
+      } else {
+        backButton.disabled = true;
+        backButton.classList.add('disabled');
+      }
+    }
   }
   
   /*
@@ -2363,39 +2831,6 @@
         cloud.visible = (index === currentSceneIndex);
       });
     }
-  }
-
-  // Adicione esta função de volta ao código - é necessária para o controle da câmera
-  function detectFloorLevel() {
-    // Verifica se currentPointCloud existe
-    if (!currentPointCloud) return 0;
-    
-    // Verifica se a geometria existe
-    if (!currentPointCloud.geometry) return 0;
-    
-    // Verifica se o atributo position existe
-    const positions = currentPointCloud.geometry.getAttribute ? 
-                      currentPointCloud.geometry.getAttribute('position') : null;
-    
-    // Se não há posições, retorna valor padrão
-    if (!positions || !positions.count) return 0;
-    
-    // Em vez de processar todos os pontos, usamos amostragem
-    const sampleSize = Math.min(1000, positions.count);
-    const step = Math.floor(positions.count / sampleSize);
-    
-    let yValues = [];
-    
-    for (let i = 0; i < positions.count; i += step) {
-      yValues.push(positions.getY(i));
-    }
-    
-    // Ordena os valores de Y
-    yValues.sort((a, b) => a - b);
-    
-    // Pega o valor de 5% mais baixo como nível do piso
-    const floorIndex = Math.floor(yValues.length * 0.05);
-    return yValues[floorIndex] || 0; // Retorna 0 se o array estiver vazio
   }
 
   // Adicione esta função de volta ao código - é necessária para o botão de reset

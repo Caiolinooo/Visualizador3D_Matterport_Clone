@@ -90,78 +90,242 @@ function extractCoordinates(metadataFile) {
     });
 }
 
-// Função para verificar melhor as panorâmicas, com mais tentativas de encontrar correspondências
-function findPanoramicImageImproved(sceneDir, sceneName) {
-  const panoramaDir = path.join(__dirname, 'input', 'panorama');
-  let panoramaUrl = null;
-  
-  // Verifica se existe diretório de panoramas
-  if (fs.existsSync(panoramaDir)) {
-    try {
-      const panoramaFiles = fs.readdirSync(panoramaDir);
-      
-      // Preparar o nome da cena para várias tentativas de correspondência
-      // 1. Remova qualquer prefixo como "__" 
-      let cleanSceneName = sceneName.replace(/^__/, '');
-      
-      // 2. Extrair apenas os números, se existirem
-      const sceneNumbers = cleanSceneName.match(/\d+/g);
-      
-      // Criar um array de possíveis correspondências para tentar
-      const possibleMatches = [
-        sceneName.toLowerCase(),                   // Nome exato
-        cleanSceneName.toLowerCase(),              // Nome sem prefixo
-        sceneNumbers ? sceneNumbers[0] : null,     // Apenas os números
-        cleanSceneName.toLowerCase().replace(/^scan_/i, '')  // Remove "Scan_" do início
-      ].filter(Boolean); // Remove valores nulos
-      
-      console.log(`Tentando encontrar panorâmica para: ${sceneName}`);
-      console.log(`Possíveis correspondências: ${possibleMatches.join(', ')}`);
-      
-      // Verificar cada arquivo contra todas as possíveis correspondências
-      for (const file of panoramaFiles) {
-        const fileName = file.toLowerCase();
-        const fileBaseName = path.parse(fileName).name;
-        
-        for (const match of possibleMatches) {
-          // Verifica se o nome do arquivo contém a correspondência ou vice-versa
-          if (fileBaseName.includes(match) || match.includes(fileBaseName)) {
-            panoramaUrl = `/input/panorama/${file}`;
-            console.log(`✅ Panorâmica encontrada: ${file} para cena ${sceneName}`);
-            return panoramaUrl;
-          }
-        }
-      }
-      
-      // Se não encontrou, tentar encontrar um arquivo com número próximo
-      if (!panoramaUrl && sceneNumbers && sceneNumbers.length > 0) {
-        const sceneNumber = parseInt(sceneNumbers[0]);
-        
-        // Procurar arquivos com números próximos (±1)
-        for (const file of panoramaFiles) {
-          const fileBaseName = path.parse(file).name;
-          const fileNumbers = fileBaseName.match(/\d+/g);
-          
-          if (fileNumbers && fileNumbers.length > 0) {
-            const fileNumber = parseInt(fileNumbers[0]);
-            if (Math.abs(fileNumber - sceneNumber) <= 1) {
-              panoramaUrl = `/input/panorama/${file}`;
-              console.log(`✅ Panorâmica com número próximo encontrada: ${file} para cena ${sceneName}`);
-              return panoramaUrl;
-            }
-          }
-        }
-      }
-      
-      console.warn(`⚠️ Nenhuma panorâmica encontrada para cena: ${sceneName}`);
-    } catch (err) {
-      console.error('Erro ao procurar panorâmicas:', err);
-    }
-  } else {
-    console.warn(`Diretório de panorâmicas não encontrado: ${panoramaDir}`);
+// Função para encontrar imagens panorâmicas associadas a uma cena
+function findPanoramicImageImproved(sceneName, originalSceneName) {
+  // Cache para evitar busca repetida da mesma panorâmica
+  // Define o cache como uma variável global se não existir
+  if (!global.panoramaCache) {
+    global.panoramaCache = {};
   }
   
-  return panoramaUrl;
+  // Se já temos no cache, retorna diretamente
+  if (global.panoramaCache[sceneName]) {
+    console.log(`[PANORAMA] Usando panorâmica em cache para cena: ${sceneName}`);
+    return global.panoramaCache[sceneName];
+  }
+  
+  // Diretórios onde procurar panorâmicas
+  const panoramaDirs = [
+    path.join(__dirname, 'input', 'panorama'),
+    path.join(__dirname, 'input_data', 'panorama'),
+    path.join(__dirname, 'public', 'panorama')
+  ];
+  
+  // Extensões de arquivo a serem consideradas
+  const validExtensions = ['.jpg', '.jpeg', '.png', '.webp'];
+  
+  console.log(`[PANORAMA] Tentando encontrar panorâmica para cena: ${sceneName}`);
+  console.log(`[PANORAMA] Nome original da cena (se disponível): ${originalSceneName || 'N/A'}`);
+  
+  // Implementa algoritmo de similaridade de string
+  function stringSimilarity(str1, str2) {
+    if (!str1 || !str2) return 0;
+    
+    // Converte para minúsculas e remove caracteres não alfanuméricos
+    const cleanStr1 = str1.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const cleanStr2 = str2.toLowerCase().replace(/[^a-z0-9]/g, '');
+    
+    // Algoritmo de Levenshtein simplificado para similaridade
+    const len1 = cleanStr1.length;
+    const len2 = cleanStr2.length;
+    
+    // Se um dos strings é vazio, a distância é o tamanho do outro
+    if (len1 === 0) return 0;
+    if (len2 === 0) return 0;
+    
+    // Se os strings são iguais, similaridade máxima
+    if (cleanStr1 === cleanStr2) return 1;
+    
+    // Verifica se um contém o outro
+    if (cleanStr1.includes(cleanStr2) || cleanStr2.includes(cleanStr1)) {
+      return 0.9;
+    }
+    
+    // Extrai números de ambos os strings e verifica se são iguais
+    const num1 = cleanStr1.match(/\d+/g);
+    const num2 = cleanStr2.match(/\d+/g);
+    
+    if (num1 && num2 && num1[0] === num2[0]) {
+      return 0.8;
+    }
+    
+    // Similaridade baseada em caracteres comuns
+    let matches = 0;
+    for (let i = 0; i < len1; i++) {
+      if (cleanStr2.includes(cleanStr1[i])) {
+        matches++;
+      }
+    }
+    
+    return matches / Math.max(len1, len2);
+  }
+  
+  // Função para preparar variações do nome da cena para busca
+  const prepareSceneName = (name) => {
+    if (!name) return [];
+    
+    // Remove caracteres especiais e converte para minúsculas
+    const cleanName = name.toLowerCase().replace(/[^\w\d]/g, '');
+    
+    // Extrai números do nome
+    const numbers = name.match(/\d+/g);
+    const numberStr = numbers ? numbers.join('') : '';
+    
+    // Cria variações do nome
+    const variations = [
+      name.toLowerCase(),                          // original minúsculo
+      cleanName,                                  // limpo
+      `scan${numberStr}`,                         // scan + números
+      `scene${numberStr}`,                        // scene + números
+      numbers ? numbers[0] : '',                  // só o primeiro número
+      numbers ? `scan_${numbers[0]}` : '',        // scan_ + primeiro número
+      numbers ? `scan${numbers[0]}` : '',         // scan + primeiro número
+      numbers ? `scene_${numbers[0]}` : '',       // scene_ + primeiro número
+      numbers ? `scene${numbers[0]}` : '',        // scene + primeiro número
+      numbers ? `s${numbers[0]}` : '',            // s + primeiro número
+      numbers ? `${numbers[0]}` : '',             // só o número
+    ];
+    
+    return variations.filter(v => v); // Remove valores vazios
+  };
+  
+  // Obtém variações do nome da cena
+  const sceneNameVariations = prepareSceneName(sceneName);
+  const originalNameVariations = originalSceneName ? prepareSceneName(originalSceneName) : [];
+  
+  // Combina todas as variações
+  const allVariations = [...new Set([...sceneNameVariations, ...originalNameVariations])];
+  
+  console.log(`[PANORAMA] Procurando por variações: ${allVariations.join(', ')}`);
+  
+  // Resultados da busca com pontuações de similaridade
+  let bestMatch = null;
+  let bestScore = 0;
+  let allPanoFiles = [];
+  
+  // Busca em cada diretório
+  for (const dir of panoramaDirs) {
+    if (!fs.existsSync(dir)) {
+      console.log(`[PANORAMA] Diretório não encontrado: ${dir}`);
+      continue;
+    }
+    
+    try {
+      // Lista todos os arquivos no diretório
+      const files = fs.readdirSync(dir).filter(file => {
+        const ext = path.extname(file).toLowerCase();
+        return validExtensions.includes(ext);
+      });
+      
+      // Adiciona à lista completa
+      allPanoFiles = [...allPanoFiles, ...files.map(f => ({ file: f, dir: dir }))];
+      
+      console.log(`[PANORAMA] Encontrados ${files.length} arquivos em ${dir}`);
+    } catch (err) {
+      console.error(`[PANORAMA] Erro ao ler diretório ${dir}:`, err);
+    }
+  }
+  
+  // Percorre todos os arquivos para encontrar a melhor correspondência
+  for (const { file, dir } of allPanoFiles) {
+    const fileName = path.basename(file, path.extname(file)).toLowerCase();
+    
+    // Procura correspondência com as variações do nome da cena
+    for (const variation of allVariations) {
+      const score = stringSimilarity(fileName, variation);
+      
+      // Armazena a melhor correspondência
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = {
+          file: file,
+          dir: dir,
+          score: score,
+          variation: variation
+        };
+      }
+    }
+  }
+  
+  // Verifica se encontramos uma correspondência razoável
+  if (bestMatch && bestMatch.score >= 0.5) {
+    const panoramaPath = path.join(bestMatch.dir, bestMatch.file);
+    const panoramaUrl = '/panorama/' + bestMatch.file;
+    
+    console.log(`[PANORAMA] Correspondência encontrada: ${bestMatch.file} (score: ${bestMatch.score.toFixed(2)})`);
+    console.log(`[PANORAMA] Usando panorâmica: ${panoramaUrl}`);
+    
+    // Salva no cache para futuras consultas
+    global.panoramaCache[sceneName] = panoramaUrl;
+    
+    return panoramaUrl;
+  }
+  
+  // Tenta uma abordagem baseada apenas nos números
+  const sceneNumbers = sceneName.match(/\d+/g);
+  
+  if (sceneNumbers && sceneNumbers.length > 0) {
+    console.log(`[PANORAMA] Tentando encontrar panorâmica pelo número: ${sceneNumbers[0]}`);
+    
+    // Procura por qualquer arquivo que contenha o mesmo número
+    for (const { file, dir } of allPanoFiles) {
+      const fileNumbers = file.match(/\d+/g);
+      
+      if (fileNumbers && fileNumbers.length > 0 && fileNumbers[0] === sceneNumbers[0]) {
+        const panoramaPath = path.join(dir, file);
+        const panoramaUrl = '/panorama/' + file;
+        
+        console.log(`[PANORAMA] Encontrada panorâmica pelo número: ${file}`);
+        
+        // Salva no cache
+        global.panoramaCache[sceneName] = panoramaUrl;
+        
+        return panoramaUrl;
+      }
+    }
+    
+    // Tenta números próximos (+-1)
+    const sceneNumber = parseInt(sceneNumbers[0]);
+    const variations = [
+      (sceneNumber - 1).toString(),
+      (sceneNumber + 1).toString()
+    ];
+    
+    for (const variation of variations) {
+      for (const { file, dir } of allPanoFiles) {
+        const fileNumbers = file.match(/\d+/g);
+        
+        if (fileNumbers && fileNumbers.length > 0 && fileNumbers[0] === variation) {
+          const panoramaPath = path.join(dir, file);
+          const panoramaUrl = '/panorama/' + file;
+          
+          console.log(`[PANORAMA] Encontrada panorâmica com número próximo: ${file}`);
+          
+          // Salva no cache
+          global.panoramaCache[sceneName] = panoramaUrl;
+          
+          return panoramaUrl;
+        }
+      }
+    }
+  }
+  
+  // Se chegou aqui, não encontrou nenhuma correspondência
+  console.warn(`[PANORAMA] Nenhuma panorâmica encontrada para: ${sceneName}`);
+  
+  // Se temos algum arquivo de panorâmica, usa o primeiro como fallback
+  if (allPanoFiles.length > 0) {
+    const { file, dir } = allPanoFiles[0];
+    const panoramaUrl = '/panorama/' + file;
+    
+    console.log(`[PANORAMA] Usando panorâmica padrão como fallback: ${file}`);
+    
+    // Não cacheia isso para permitir novas tentativas
+    return panoramaUrl;
+  }
+  
+  console.error(`[PANORAMA] Nenhuma panorâmica disponível`);
+  return null;
 }
 
 // Função para coletar dados das cenas processadas
