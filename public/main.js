@@ -3092,6 +3092,94 @@
 
   console.log('main.js foi carregado e inicializado');
 
+  // Função para resetar a visualização da câmera
+  function resetView() {
+    console.log('Resetando visualização...');
+    
+    // Se não temos uma cena carregada, não fazemos nada
+    if (!currentSceneData) {
+      console.warn('Não há cena carregada para resetar visualização');
+      return;
+    }
+    
+    // Detecta o nível do piso para posicionar na altura correta
+    const floorLevel = detectFloorLevel();
+    const center = currentSceneData.center || [0, 0, 0];
+    const eyeHeight = floorLevel + 1.6; // 1.6m é a altura média dos olhos
+    
+    // Posição para onde a câmera vai (centro da cena, na altura dos olhos)
+    const targetPos = new THREE.Vector3(center[0], eyeHeight, center[2]);
+    
+    // Para onde a câmera vai olhar (para frente/norte por padrão)
+    const targetTarget = new THREE.Vector3(center[0], eyeHeight, center[2] - 1);
+    
+    // Anima suavemente a transição da câmera
+    const startPos = camera.position.clone();
+    const startTarget = controls.target.clone();
+    const duration = 1000; // milissegundos
+    
+    // Tempo inicial para a animação
+    const startTime = performance.now();
+    
+    function animateReset() {
+      const now = performance.now();
+      const elapsed = now - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      
+      // Função de easing para movimento mais natural
+      const easeProgress = 1 - Math.pow(1 - progress, 3);
+      
+      // Interpola posição da câmera
+      camera.position.lerpVectors(startPos, targetPos, easeProgress);
+      
+      // Interpola alvo dos controles
+      controls.target.lerpVectors(startTarget, targetTarget, easeProgress);
+      controls.update();
+      
+      // Continua a animação se não terminou
+      if (progress < 1) {
+        requestAnimationFrame(animateReset);
+      } else {
+        console.log('Visualização resetada para posição padrão');
+      }
+    }
+    
+    // Inicia a animação
+    animateReset();
+    
+    // Exibe mensagem para o usuário
+    showMessage('Visualização resetada');
+  }
+
+  // Função para animar o movimento da câmera
+  function animateCameraMovement(startPos, endPos, startTarget, endTarget, duration) {
+    const startTime = performance.now();
+    
+    function animate() {
+      const now = performance.now();
+      const elapsed = now - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      
+      // Função de easing para movimento mais natural
+      const easeProgress = 1 - Math.pow(1 - progress, 3);
+      
+      // Interpola posição da câmera
+      camera.position.lerpVectors(startPos, endPos, easeProgress);
+      
+      // Interpola alvo dos controles
+      controls.target.lerpVectors(startTarget, endTarget, easeProgress);
+      controls.update();
+      
+      // Continua a animação se não terminou
+      if (progress < 1) {
+        requestAnimationFrame(animate);
+      }
+    }
+    
+    // Inicia a animação
+    animate();
+  }
+
   // Função para tratar eventos de teclado
   function onKeyDown(event) {
     // Se pressionar ESC, sai dos modos de interação
