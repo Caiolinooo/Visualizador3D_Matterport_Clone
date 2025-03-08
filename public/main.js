@@ -3091,4 +3091,47 @@
   }
 
   console.log('main.js foi carregado e inicializado');
+
+  // Função para tratar eventos de teclado
+  function onKeyDown(event) {
+    // Se pressionar ESC, sai dos modos de interação
+    if (event.key === 'Escape') {
+      if (isMeasuring || isTagMode) {
+        isMeasuring = false;
+        isTagMode = false;
+        updateUIState();
+        showMessage('Modo de interação desativado');
+      }
+    }
+    
+    // Teclas numéricas para navegar entre cenas (1-9)
+    if (!isNaN(parseInt(event.key)) && event.key >= '1' && event.key <= '9') {
+      const sceneIndex = parseInt(event.key) - 1;
+      if (sceneIndex >= 0 && sceneIndex < scenes.length) {
+        navigateToScene(sceneIndex);
+      }
+    }
+    
+    // Outras teclas de atalho
+    switch (event.key) {
+      case 'm': // M - Modo de medição
+        toggleMeasureMode();
+        break;
+      case 't': // T - Modo de tags
+        toggleTagMode();
+        break;
+      case 'd': // D - Modo dollhouse
+        toggleDollhouseMode();
+        break;
+      case 'f': // F - Modo planta baixa
+        toggleFloorPlan();
+        break;
+      case 'r': // R - Resetar visualização
+        resetView();
+        break;
+      case 'a': // A - Tour automático
+        toggleAutoTour();
+        break;
+    }
+  }
 })();
