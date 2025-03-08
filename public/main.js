@@ -1381,7 +1381,7 @@
         updateUIState();
         
         // Atualiza a lista de cenas no sidebar para destacar a atual
-        updateScenesList();
+        populateScenesMenu(scenes); // Substitui updateScenesList por populateScenesMenu
       }, 500);
     });
   }
@@ -2936,6 +2936,15 @@
       });
       
       document.body.appendChild(fullscreenButton);
+    }
+  }
+
+  // Adicione esta função que estava faltando
+  function updateScenesList() {
+    // Recarrega a lista de cenas para atualizar a cena atual
+    if (scenes && scenes.length > 0) {
+      populateScenesMenu(scenes);
+      console.log('Lista de cenas atualizada após navegação');
     }
   }
 
