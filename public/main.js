@@ -738,14 +738,18 @@
 
   // Função para detectar o nível do piso baseado na nuvem de pontos
   function detectFloorLevel() {
+    // Verificar se já calculamos o nível do piso recentemente (cache)
+    if (window.cachedFloorLevel !== undefined) {
+      // Usa o valor em cache para evitar cálculos repetidos e spam no console
+      return window.cachedFloorLevel;
+    }
+    
     // Valor padrão caso não consigamos detectar
     let floorLevel = 0;
     
     // Se temos nuvem de pontos, tentamos detectar o nível do piso
     if (pointClouds && pointClouds.length > 0) {
-      let lowestPointsSum = 0;
-      let lowestPointsCount = 0;
-      let minY = Infinity;
+      let heightData = [];
       
       // Para cada nuvem de pontos
       pointClouds.forEach(cloud => {
@@ -753,39 +757,40 @@
           const positions = cloud.geometry.getAttribute('position');
           
           if (positions && positions.array) {
-            // Encontrar o ponto mais baixo
-            for (let i = 1; i < positions.array.length; i += 3) {
-              const y = positions.array[i];
-              if (y < minY) {
-                minY = y;
-              }
-            }
+            // Coleta amostra de pontos (para não processar todos)
+            const sampleStep = Math.max(1, Math.floor(positions.array.length / 3000));
             
-            // Calcular a média dos pontos próximos ao mínimo
-            // (consideramos pontos até 0.3m acima do mínimo como parte do piso)
-            for (let i = 1; i < positions.array.length; i += 3) {
+            for (let i = 1; i < positions.array.length; i += 3 * sampleStep) {
               const y = positions.array[i];
-              if (y < minY + 0.3) {
-                lowestPointsSum += y;
-                lowestPointsCount++;
+              // Filtrar valores extremos fora de um intervalo razoável (-5 a 5 metros)
+              if (y > -5 && y < 5) {
+                heightData.push(y);
               }
             }
           }
         }
       });
       
-      // Se encontramos pontos do piso, calculamos a média
-      if (lowestPointsCount > 0) {
-        floorLevel = lowestPointsSum / lowestPointsCount;
-        console.log(`Nível do piso detectado: ${floorLevel.toFixed(2)}m`);
-      } else if (minY !== Infinity) {
-        // Se não conseguimos calcular a média, usamos o ponto mais baixo
-        floorLevel = minY;
-        console.log(`Usando ponto mais baixo como nível do piso: ${floorLevel.toFixed(2)}m`);
+      // Se encontramos pontos válidos
+      if (heightData.length > 0) {
+        // Ordenar os valores de altura
+        heightData.sort((a, b) => a - b);
+        
+        // Usar o 10º percentil como nível do piso (evita outliers inferiores)
+        const percentileIndex = Math.floor(heightData.length * 0.1);
+        floorLevel = heightData[percentileIndex];
+        
+        // Verifica se o valor está em um intervalo razoável
+        if (floorLevel < -2 || floorLevel > 2) {
+          console.warn(`Valor de piso detectado fora do intervalo comum: ${floorLevel.toFixed(2)}m. Ajustando para 0m.`);
+          floorLevel = 0; // Fallback para um valor seguro
+        } else {
+          console.log(`Nível do piso detectado: ${floorLevel.toFixed(2)}m`, {once: true});
+        }
       }
     }
     
-    // Compatibilidade com versão anterior - verifica currentPointCloud também
+    // Compatibilidade com versão anterior - verificar currentPointCloud apenas se ainda não temos valor
     if (currentPointCloud && floorLevel === 0) {
       // Verifica se a geometria existe
       if (currentPointCloud.geometry) {
@@ -815,11 +820,19 @@
       }
     }
     
-    // Se não detectamos nada (nenhuma nuvem de pontos), usamos 0 como padrão
-    if (floorLevel === Infinity || isNaN(floorLevel)) {
+    // Se não detectamos nada válido, usamos 0 como padrão
+    if (floorLevel === Infinity || isNaN(floorLevel) || Math.abs(floorLevel) > 5) {
       floorLevel = 0;
-      console.log('Não foi possível detectar o nível do piso. Usando 0m como padrão.');
+      console.log('Usando 0m como nível padrão do piso');
     }
+    
+    // Armazena o valor em cache para evitar recálculos frequentes
+    window.cachedFloorLevel = floorLevel;
+    
+    // Invalida o cache após 30 segundos (caso mude de ambiente)
+    setTimeout(() => {
+      window.cachedFloorLevel = undefined;
+    }, 30000);
     
     return floorLevel;
   }
@@ -2477,7 +2490,11 @@
   function createNavigationPoints() {
     console.log('Criando pontos de navegação estilo Matterport');
     
-    // Remove pontos de navegação existentes
+    // Remover pontos de navegação antigos
+    const oldPoints = document.querySelectorAll('.mp-nav-point');
+    oldPoints.forEach(point => point.remove());
+    
+    // Limpa pontos 3D antigos
     scene.children.forEach(child => {
       if (child.userData && child.userData.type === 'navpoint') {
         scene.remove(child);
@@ -2488,7 +2505,25 @@
     const floorLevel = detectFloorLevel();
     console.log('Nível do piso para pontos de navegação:', floorLevel);
     
-    // Cria círculos para cada cena disponível
+    // Container para os pontos de navegação HTML
+    let navPointsContainer = document.getElementById('nav-points-container');
+    if (!navPointsContainer) {
+      navPointsContainer = document.createElement('div');
+      navPointsContainer.id = 'nav-points-container';
+      navPointsContainer.style.position = 'absolute';
+      navPointsContainer.style.top = '0';
+      navPointsContainer.style.left = '0';
+      navPointsContainer.style.width = '100%';
+      navPointsContainer.style.height = '100%';
+      navPointsContainer.style.pointerEvents = 'none';
+      navPointsContainer.style.zIndex = '200';
+      document.body.appendChild(navPointsContainer);
+    }
+    
+    // Array para armazenar pontos candidatos para filtragem
+    const navPointCandidates = [];
+    
+    // Cria pontos para cada cena disponível
     scenes.forEach((sceneData, index) => {
       if (index === currentSceneIndex) return; // Não cria ponto para a cena atual
       
@@ -2511,946 +2546,233 @@
         );
       }
       
+      // Armazena o candidato com informações de distância para filtragem posterior
+      navPointCandidates.push({
+        center,
+        name: sceneData.name,
+        index,
+        distance
+      });
+    });
+    
+    // Filtra pontos para evitar aglomeração
+    // Ordena por distância (do mais próximo ao mais distante)
+    navPointCandidates.sort((a, b) => a.distance - b.distance);
+    
+    // Filtra pontos que estão muito próximos uns dos outros (mantém apenas o mais próximo)
+    const MIN_POINT_DISTANCE = 1.5; // Distância mínima entre pontos de navegação
+    const filteredPoints = [];
+    
+    navPointCandidates.forEach(candidate => {
+      // Verifica se este ponto está muito próximo de outro ponto já aceito
+      const isTooClose = filteredPoints.some(point => {
+        const pointDistance = Math.sqrt(
+          Math.pow(point.center[0] - candidate.center[0], 2) +
+          Math.pow(point.center[2] - candidate.center[2], 2)
+        );
+        return pointDistance < MIN_POINT_DISTANCE;
+      });
+      
+      // Se não estiver muito próximo, adiciona à lista filtrada
+      if (!isTooClose) {
+        filteredPoints.push(candidate);
+      } else {
+        console.log(`Ponto para ${candidate.name} filtrado por estar muito próximo de outro ponto`);
+      }
+    });
+    
+    // Limite de pontos visíveis para evitar poluição visual (Matterport mostra ~6-8 pontos por vez)
+    const MAX_VISIBLE_POINTS = 8;
+    const visiblePoints = filteredPoints.slice(0, MAX_VISIBLE_POINTS);
+    
+    // Distância máxima para mostrar pontos
+    const MAX_NAV_DISTANCE = 25; // Metros
+    
+    // Cria pontos HTML e 3D
+    visiblePoints.forEach(point => {
       // Se a distância for muito grande, não criar ponto de navegação
-      const MAX_NAV_DISTANCE = 50; // Ajuste conforme necessário para o seu espaço
-      if (distance > MAX_NAV_DISTANCE) {
-        console.log(`Ponto de navegação para ${sceneData.name} ignorado: distância ${distance.toFixed(2)}m (muito longe)`);
+      if (point.distance > MAX_NAV_DISTANCE) {
+        console.log(`Ponto de navegação para ${point.name} ignorado: distância ${point.distance.toFixed(2)}m (muito longe)`);
         return;
       }
       
-      console.log(`Criando ponto de navegação para ${sceneData.name} a ${distance.toFixed(2)}m de distância`);
+      console.log(`Criando ponto de navegação para ${point.name} a ${point.distance.toFixed(2)}m de distância`);
       
-      // Cria um círculo no chão (similar ao Matterport)
-      const circleGeometry = new THREE.CircleGeometry(0.4, 32);
+      // A altura do ponto depende da distância para criar sensação de perspectiva
+      // Pontos mais distantes ficam mais altos para simular o efeito de perspectiva do Matterport
+      const navPointHeight = floorLevel + 0.15 + (point.distance * 0.01);
+      
+      // Posição do ponto
+      const position = new THREE.Vector3(
+        point.center[0],
+        navPointHeight, // Posiciona o ponto um pouco acima do chão
+        point.center[2]
+      );
+      
+      // Cria o ponto de navegação HTML em vez de 3D
+      createHtmlNavPoint(position, point.name, point.index, point.distance);
+      
+      // Ainda mantém um ponto 3D invisível para raycasting
+      const circleGeometry = new THREE.CircleGeometry(0.2, 16);
       const circleMaterial = new THREE.MeshBasicMaterial({
         color: 0x00aaff,
         transparent: true,
-        opacity: 0.7,
+        opacity: 0.0, // Invisível
         side: THREE.DoubleSide
       });
       
       const navCircle = new THREE.Mesh(circleGeometry, circleMaterial);
-      
-      // Roda o círculo para ficar horizontal (no chão)
       navCircle.rotation.x = -Math.PI / 2;
-      
-      // Posiciona o círculo no NÍVEL DO PISO DETECTADO
-      const position = new THREE.Vector3(
-        center[0],
-        floorLevel + 0.01, // Ligeiramente acima do piso para evitar z-fighting
-        center[2]
-      );
       navCircle.position.copy(position);
-      
-      // Adiciona metadados
       navCircle.userData = {
         type: 'navpoint',
-        targetScene: index,
-        name: sceneData.name,
-        distance: distance
+        targetScene: point.index,
+        name: point.name,
+        distance: point.distance
       };
-      
-      // Adiciona à cena
       scene.add(navCircle);
-      
-      // Adiciona texto com o nome da cena e distância
-      const textLabel = `${sceneData.name}\n${distance.toFixed(1)}m`;
-      const textSprite = createTextSprite(textLabel);
-      textSprite.position.set(position.x, position.y + 0.5, position.z);
-      textSprite.userData = { type: 'navlabel', targetScene: index };
-      scene.add(textSprite);
-      
-      // Adiciona uma seta indicando a direção
-      addDirectionArrow(position, center);
     });
   }
 
-  // Função para criar uma seta indicando a direção da cena
-  function addDirectionArrow(position, targetCenter) {
-    if (!currentSceneData || !currentSceneData.center) return;
+  // Função para criar ponto de navegação HTML estilo Matterport
+  function createHtmlNavPoint(position3D, name, sceneIndex, distance) {
+    // Converte posição 3D para coordenadas de tela
+    const vector = position3D.clone();
+    vector.project(camera);
     
-    const currentCenter = currentSceneData.center;
+    // Coordenadas de tela
+    const x = (vector.x * 0.5 + 0.5) * window.innerWidth;
+    const y = (vector.y * -0.5 + 0.5) * window.innerHeight;
     
-    // Calcula vetor de direção entre as cenas (apenas no plano XZ)
-    const direction = new THREE.Vector2(
-      targetCenter[0] - currentCenter[0],
-      targetCenter[2] - currentCenter[2]
-    ).normalize();
-    
-    // Cria geometria para a seta
-    const arrowLength = 0.3;
-    const arrowGeometry = new THREE.BufferGeometry();
-    
-    // Ponto base da seta
-    const base = new THREE.Vector3(position.x, position.y + 0.02, position.z);
-    
-    // Ponta da seta
-    const tip = new THREE.Vector3(
-      base.x + direction.x * arrowLength,
-      base.y,
-      base.z + direction.y * arrowLength
-    );
-    
-    // Vértices para a seta (linha e cabeça)
-    const vertices = [
-      // Linha principal
-      base.x, base.y, base.z,
-      tip.x, tip.y, tip.z,
-      
-      // Cabeça da seta (asa 1)
-      tip.x, tip.y, tip.z,
-      tip.x - direction.x * 0.1 - direction.y * 0.1, tip.y, tip.z - direction.y * 0.1 + direction.x * 0.1,
-      
-      // Cabeça da seta (asa 2)
-      tip.x, tip.y, tip.z,
-      tip.x - direction.x * 0.1 + direction.y * 0.1, tip.y, tip.z - direction.y * 0.1 - direction.x * 0.1
-    ];
-    
-    arrowGeometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-    
-    // Material para a seta
-    const arrowMaterial = new THREE.LineBasicMaterial({ color: 0xffaa00, linewidth: 2 });
-    
-    // Cria a seta
-    const arrow = new THREE.LineSegments(arrowGeometry, arrowMaterial);
-    arrow.userData = { type: 'navArrow' };
-    
-    // Adiciona à cena
-    scene.add(arrow);
-  }
-
-  // Melhoria na função que lida com clique em pontos de navegação
-  function handleNavPointClick(event) {
-    console.log('Processando clique para navegação');
-    
-    // Converte coordenadas do mouse para coordenadas normalizadas (-1 a 1)
-    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
-    
-    // Configura o raycaster
-    raycaster.setFromCamera(mouse, camera);
-    
-    // Encontra objetos que intersectam com o raio
-    const intersects = raycaster.intersectObjects(scene.children, true);
-    
-    console.log('Objetos intersectados:', intersects.length);
-    
-    // Verifica se clicou em algum ponto de navegação ou texto associado
-    for (let i = 0; i < intersects.length; i++) {
-      const object = intersects[i].object;
-      
-      // Verifica propriedades para debug
-      if (object.userData) {
-        console.log('Objeto clicado:', object.userData);
-      }
-      
-      // Verifica se é um ponto de navegação ou texto associado
-      if (object.userData && 
-          (object.userData.type === 'navpoint' || object.userData.type === 'navlabel')) {
-        const targetIndex = object.userData.targetScene;
-        console.log('Ponto de navegação encontrado, navegando para:', targetIndex);
-        
-        // Navegação entre cenas com efeito de fade
-        navigateToScene(targetIndex);
-        return true;
-      }
+    // Verificar se o ponto está na frente da câmera e dentro da tela
+    if (vector.z > 1 || x < 0 || x > window.innerWidth || y < 0 || y > window.innerHeight) {
+      // Ponto está atrás da câmera ou fora da tela, não exibir
+      return;
     }
     
-    // Nenhum ponto de navegação clicado
-    return false;
-  }
-
-  // Nova função para mostrar tela vazia com instruções
-  function showEmptySceneMessage() {
-    // Limpa qualquer cena existente
-    clearScene();
+    // Criar elemento HTML para o ponto de navegação
+    const navPoint = document.createElement('div');
+    navPoint.className = 'mp-nav-point';
     
-    // Adiciona texto na interface
-    infoElement.textContent = 'Nenhuma cena disponível';
-    
-    // Cria um elemento com instruções
-    const instrucDiv = document.createElement('div');
-    instrucDiv.className = 'instructions-overlay';
-    instrucDiv.innerHTML = `
-      <div class="instructions-box">
-        <h2>Bem-vindo ao Visualizador 3D</h2>
-        <p>Nenhuma cena foi encontrada. Para começar:</p>
-        <ol>
-          <li>Coloque suas nuvens de pontos na pasta 'output'</li>
-          <li>Coloque suas panorâmicas na pasta 'input/panorama'</li>
-          <li>Coloque seus TrueViews na pasta 'input/trueview'</li>
-          <li>Reinicie o aplicativo</li>
-        </ol>
-      </div>
+    // Adicionando a estrutura Matterport-like com círculo externo e interno
+    navPoint.innerHTML = `
+      <div class="mp-nav-point-outer"></div>
+      <div class="mp-nav-point-inner"></div>
     `;
     
-    document.body.appendChild(instrucDiv);
-  }
-
-  // Nova função para mostrar mensagem de erro
-  function showErrorMessage() {
-    // Limpa qualquer cena existente
-    clearScene();
+    navPoint.setAttribute('data-scene-index', sceneIndex);
+    navPoint.setAttribute('data-name', name);
+    navPoint.setAttribute('data-distance', distance.toFixed(1));
     
-    // Adiciona texto na interface
-    infoElement.textContent = 'Erro de carregamento';
+    // Posicionar o elemento na tela
+    navPoint.style.left = `${x}px`;
+    navPoint.style.top = `${y}px`;
     
-    // Cria um elemento com a mensagem de erro
-    const errorDiv = document.createElement('div');
-    errorDiv.className = 'error-overlay';
-    errorDiv.innerHTML = `
-      <div class="error-box">
-        <h2>Erro de Conexão</h2>
-        <p>Não foi possível carregar as cenas do servidor.</p>
-        <button id="retry-btn">Tentar Novamente</button>
-      </div>
-    `;
+    // Adicionar tooltip com informações
+    navPoint.title = `${name} (${distance.toFixed(1)}m)`;
     
-    document.body.appendChild(errorDiv);
-    
-    // Adiciona evento para tentar novamente
-    document.getElementById('retry-btn').addEventListener('click', function() {
-      document.body.removeChild(errorDiv);
-      loadScenes();
+    // Adicionar evento de clique
+    navPoint.style.pointerEvents = 'auto';
+    navPoint.addEventListener('click', () => {
+      navigateToScene(sceneIndex);
     });
-  }
-
-  // Adicione esta função que está faltando (causando o erro atual)
-  function onKeyDown(event) {
-    // Se clicar no botão escape, sai do modo atual
-    if (event.key === 'Escape') {
-      if (isMeasuring || isTagMode) {
-        isMeasuring = false;
-        isTagMode = false;
-        updateUIState();
-        showMessage('Modo de interação desativado');
-      }
-    }
-  }
-
-  // Adicione esta função para processamento de interseções
-  function processIntersections(intersects) {
-    // Verifica se algum objeto foi interceptado
-    if (intersects.length > 0) {
-      const object = intersects[0].object;
-      
-      // Tratamento específico para diferentes tipos de objetos
-      if (object.userData && object.userData.type === 'navpoint') {
-        // Destaca ponto de navegação no hover
-        if (hoverState.mesh !== object) {
-          // Restaura o material anterior se houver
-          if (hoverState.mesh) {
-            hoverState.mesh.material.emissive.setHex(hoverState.originalColor);
-          }
-          
-          // Guarda informações do objeto atual
-          hoverState.mesh = object;
-          hoverState.originalColor = object.material.emissive.getHex();
-          
-          // Destaca o objeto
-          object.material.emissive.setHex(0x555555);
-        }
-      }
+    
+    // Efeito de hover para destacar o ponto
+    navPoint.addEventListener('mouseenter', () => {
+      navPoint.classList.add('mp-nav-point-hover');
+    });
+    
+    navPoint.addEventListener('mouseleave', () => {
+      navPoint.classList.remove('mp-nav-point-hover');
+    });
+    
+    // Adicionar ao container
+    const container = document.getElementById('nav-points-container');
+    if (container) {
+      container.appendChild(navPoint);
     } else {
-      // Nenhum objeto sob o cursor, restaura aparência normal
-      if (hoverState.mesh) {
-        hoverState.mesh.material.emissive.setHex(hoverState.originalColor);
-        hoverState.mesh = null;
-      }
-    }
-  }
-
-  // Adicione estas variáveis que podem estar faltando
-  let lastFrameTime = 0;
-  let hovering = false;
-
-  // Adicione esta função para criar uma transição suave
-  function createFadeTransition() {
-    // Remove transição anterior, se existir
-    const existingOverlay = document.getElementById('fade-overlay');
-    if (existingOverlay) {
-      document.body.removeChild(existingOverlay);
+      document.body.appendChild(navPoint);
     }
     
-    // Cria um novo overlay de fade
-    const fadeOverlay = document.createElement('div');
-    fadeOverlay.id = 'fade-overlay';
-    fadeOverlay.style.position = 'fixed';
-    fadeOverlay.style.top = '0';
-    fadeOverlay.style.left = '0';
-    fadeOverlay.style.width = '100%';
-    fadeOverlay.style.height = '100%';
-    fadeOverlay.style.backgroundColor = '#000';
-    fadeOverlay.style.opacity = '0';
-    fadeOverlay.style.transition = 'opacity 0.4s ease';
-    fadeOverlay.style.zIndex = '1000';
-    fadeOverlay.style.pointerEvents = 'none';
-    
-    document.body.appendChild(fadeOverlay);
-    
-    // Força um reflow para garantir que a transição funcione
-    fadeOverlay.offsetHeight;
-    
-    // Inicia a transição
-    fadeOverlay.style.opacity = '1';
-    
-    // Remove o overlay após a transição completa
-    setTimeout(() => {
-      if (fadeOverlay.parentNode) {
-        fadeOverlay.style.opacity = '0';
-        
-        // Remove o elemento após fade out
-        setTimeout(() => {
-          if (fadeOverlay.parentNode) {
-            document.body.removeChild(fadeOverlay);
-          }
-        }, 400);
-      }
-    }, 800);
+    return navPoint;
   }
 
-  // Nova função para alternar entre modo unificado e cena única
-  function toggleUnifiedMode() {
-    unifiedMode = !unifiedMode;
-    showMessage(unifiedMode ? 'Modo unificado: TODAS as nuvens' : 'Modo único: apenas cena atual');
+  // Função para atualizar os pontos de navegação HTML quando a câmera se move
+  function updateNavPointsPositions() {
+    const navPoints = document.querySelectorAll('.mp-nav-point');
+    if (navPoints.length === 0) return;
     
-    // Atualiza visibilidade das nuvens
-    updatePointCloudsVisibility();
-  }
-
-  // Função para atualizar a visibilidade das nuvens baseado no modo
-  function updatePointCloudsVisibility() {
-    if (unifiedMode) {
-      // No modo unificado, todas as nuvens ficam visíveis
-      pointClouds.forEach(cloud => {
-        cloud.visible = true;
-      });
-    } else {
-      // No modo único, apenas a nuvem da cena atual fica visível
-      pointClouds.forEach((cloud, index) => {
-        cloud.visible = (index === currentSceneIndex);
-      });
-    }
-  }
-
-  // Adicione esta função de volta ao código - é necessária para o botão de reset
-  function resetView() {
+    // Reutilizamos o valor do piso em cache para evitar cálculos repetidos que causam spam no console
     const floorLevel = detectFloorLevel();
-    const centerScene = currentSceneData?.center || [0, 0, 0];
     
-    // Posição padrão: altura dos olhos, olhando para frente
-    const targetPos = new THREE.Vector3(centerScene[0], floorLevel + 1.6, centerScene[2]);
-    const targetTarget = new THREE.Vector3(centerScene[0], floorLevel + 1.6, centerScene[2] - 1);
-    
-    animateCameraMovement(camera.position, targetPos, controls.target, targetTarget, 1000);
-    
-    showMessage('Visualização resetada');
-  }
-
-  // Adicione esta função de volta ao código - é necessária para a animação de câmera
-  function animateCameraMovement(startPos, endPos, startTarget, endTarget, duration) {
-    const startTime = Date.now();
-    
-    function animate() {
-      const now = Date.now();
-      const elapsed = now - startTime;
-      const progress = Math.min(elapsed / duration, 1);
+    navPoints.forEach(point => {
+      const sceneIndex = parseInt(point.getAttribute('data-scene-index'));
+      const sceneData = scenes[sceneIndex];
       
-      // Função de easing para movimento mais natural
-      const easeProgress = 1 - Math.pow(1 - progress, 3);
+      if (!sceneData || !sceneData.center) return;
       
-      // Interpola posição da câmera
-      camera.position.lerpVectors(startPos, endPos, easeProgress);
+      // Usa o mesmo cálculo de altura baseado na distância que usamos na criação
+      const distance = parseFloat(point.getAttribute('data-distance') || "0");
+      const navPointHeight = floorLevel + 0.15 + (distance * 0.01);
       
-      // Interpola alvo dos controles
-      controls.target.lerpVectors(startTarget, endTarget, easeProgress);
-      controls.update();
+      const position3D = new THREE.Vector3(
+        sceneData.center[0],
+        navPointHeight,
+        sceneData.center[2]
+      );
       
-      // Continua a animação se não terminou
-      if (progress < 1) {
-        requestAnimationFrame(animate);
-      }
-    }
-    
-    animate();
-  }
-
-  // Adicione esta função de volta ao código - é necessária para criar textos flutuantes
-  function createTextSprite(message) {
-    const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d');
-    canvas.width = 256;
-    canvas.height = 128;
-    
-    context.font = "Bold 24px Arial";
-    context.fillStyle = "rgba(255,255,255,0.95)";
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    
-    context.fillStyle = "rgba(0,0,0,0.8)";
-    context.textAlign = "center";
-    context.fillText(message, canvas.width / 2, canvas.height / 2);
-    
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.needsUpdate = true;
-    
-    const spriteMaterial = new THREE.SpriteMaterial({
-      map: texture,
-      transparent: true,
-      depthTest: false,
-      depthWrite: false
-    });
-    
-    const sprite = new THREE.Sprite(spriteMaterial);
-    sprite.scale.set(2, 1, 1);
-    
-    return sprite;
-  }
-
-  // Adicione a função de setup do mini-mapa após a função setupUI
-  function setupMiniMap() {
-    console.log('Configurando mini-mapa estilo Matterport');
-    
-    // Cria container para o mini-mapa
-    miniMapContainer = document.createElement('div');
-    miniMapContainer.id = 'mini-map';
-    miniMapContainer.style.position = 'absolute';
-    miniMapContainer.style.bottom = '20px';
-    miniMapContainer.style.right = '20px';
-    miniMapContainer.style.width = '200px';
-    miniMapContainer.style.height = '200px';
-    miniMapContainer.style.border = '2px solid #fff';
-    miniMapContainer.style.borderRadius = '5px';
-    miniMapContainer.style.overflow = 'hidden';
-    miniMapContainer.style.boxShadow = '0 0 10px rgba(0,0,0,0.5)';
-    miniMapContainer.style.zIndex = '100';
-    document.body.appendChild(miniMapContainer);
-    
-    // Cria cena para o mini-mapa
-    miniMap = new THREE.Scene();
-    miniMap.background = new THREE.Color(0x333333);
-    
-    // Cria câmera para visão de topo
-    miniMapCamera = new THREE.OrthographicCamera(
-      -10, 10, 10, -10, 0.1, 1000
-    );
-    miniMapCamera.position.set(0, 20, 0);
-    miniMapCamera.lookAt(0, 0, 0);
-    miniMapCamera.up.set(0, 0, -1); // Ajusta para que o norte fique para cima
-    
-    // Adiciona iluminação básica
-    const light = new THREE.AmbientLight(0xffffff, 1);
-    miniMap.add(light);
-    
-    // Cria renderer separado para o mini-mapa
-    const miniMapRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    miniMapRenderer.setSize(200, 200);
-    miniMapRenderer.setPixelRatio(window.devicePixelRatio);
-    miniMapContainer.appendChild(miniMapRenderer.domElement);
-    
-    // Cria indicador da posição do usuário
-    const markerGeometry = new THREE.CircleGeometry(0.3, 32);
-    const markerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-    userPositionMarker = new THREE.Mesh(markerGeometry, markerMaterial);
-    userPositionMarker.rotation.x = -Math.PI / 2; // Roda para ficar no plano horizontal
-    miniMap.add(userPositionMarker);
-    
-    // Cria grid de referência
-    const gridHelper = new THREE.GridHelper(20, 20, 0x555555, 0x333333);
-    gridHelper.rotateX(Math.PI / 2);
-    miniMap.add(gridHelper);
-    
-    // Adiciona botão para alternar a visibilidade do mini-mapa
-    const toggleMiniMapButton = document.createElement('button');
-    toggleMiniMapButton.textContent = 'Mapa';
-    toggleMiniMapButton.className = 'btn';
-    toggleMiniMapButton.title = 'Alternar Mini-Mapa';
-    toggleMiniMapButton.innerHTML = '🗺️';
-    toggleMiniMapButton.style.position = 'absolute';
-    toggleMiniMapButton.style.top = '5px';
-    toggleMiniMapButton.style.right = '5px';
-    toggleMiniMapButton.style.zIndex = '101';
-    toggleMiniMapButton.style.width = '30px';
-    toggleMiniMapButton.style.height = '30px';
-    toggleMiniMapButton.style.padding = '0';
-    toggleMiniMapButton.addEventListener('click', toggleMiniMap);
-    miniMapContainer.appendChild(toggleMiniMapButton);
-    
-    // Função para renderizar o mini-mapa
-    function renderMiniMap() {
-      // Atualiza posição do marcador do usuário
-      if (userPositionMarker && camera) {
-        userPositionMarker.position.set(camera.position.x, 0, camera.position.z);
+      // Converte posição 3D para coordenadas de tela
+      const vector = position3D.clone();
+      vector.project(camera);
+      
+      // Coordenadas de tela
+      const x = (vector.x * 0.5 + 0.5) * window.innerWidth;
+      const y = (vector.y * -0.5 + 0.5) * window.innerHeight;
+      
+      // Oculta pontos que estão atrás da câmera ou fora da tela
+      if (vector.z > 1 || x < 0 || x > window.innerWidth || y < 0 || y > window.innerHeight) {
+        point.style.display = 'none';
+      } else {
+        point.style.display = 'flex';
+        point.style.left = `${x}px`;
+        point.style.top = `${y}px`;
         
-        // Rotação do marcador para indicar para onde o usuário está olhando
-        const direction = new THREE.Vector3();
-        camera.getWorldDirection(direction);
-        const angle = Math.atan2(direction.x, direction.z);
-        userPositionMarker.rotation.z = angle;
-      }
-      
-      // Centraliza câmera do mini-mapa na posição do usuário
-      if (miniMapCamera && camera) {
-        miniMapCamera.position.set(camera.position.x, 20, camera.position.z);
-        miniMapCamera.lookAt(camera.position.x, 0, camera.position.z);
-      }
-      
-      // Renderiza mini-mapa
-      miniMapRenderer.render(miniMap, miniMapCamera);
-      
-      // Continua o loop de renderização
-      requestAnimationFrame(renderMiniMap);
-    }
-    
-    // Inicia o loop de renderização do mini-mapa
-    renderMiniMap();
-    
-    console.log('Mini-mapa configurado');
-    return miniMapRenderer;
-  }
-
-  // Função para alternar a visibilidade do mini-mapa
-  function toggleMiniMap() {
-    isMiniMapVisible = !isMiniMapVisible;
-    if (miniMapContainer) {
-      miniMapContainer.style.display = isMiniMapVisible ? 'block' : 'none';
-    }
-  }
-
-  // Função para atualizar o mini-mapa quando uma nova cena é carregada
-  function updateMiniMapForScene(sceneData) {
-    if (!miniMap) return;
-    
-    // Limpa pontos de navegação anteriores
-    miniMap.children.forEach(child => {
-      if (child.userData && child.userData.type === 'navpoint-minimap') {
-        miniMap.remove(child);
+        // Ajusta o tamanho do ponto baseado na distância para criar efeito de perspectiva
+        // Pontos mais distantes ficam menores
+        const scale = Math.max(0.6, 1 - (distance * 0.02));
+        point.style.transform = `translate(-50%, -50%) scale(${scale})`;
+        
+        // Ajusta a opacidade baseada na distância
+        const opacity = Math.max(0.4, 1 - (distance * 0.03));
+        point.querySelector('.mp-nav-point-outer').style.opacity = opacity;
       }
     });
-    
-    // Adiciona pontos para todas as cenas no mini-mapa
-    if (scenes && scenes.length > 0) {
-      scenes.forEach((scene, index) => {
-        if (scene.center && Array.isArray(scene.center) && scene.center.length >= 3) {
-          // Cria um ponto no mini-mapa para cada cena
-          const pointGeometry = new THREE.CircleGeometry(0.2, 16);
-          const pointMaterial = new THREE.MeshBasicMaterial({ 
-            color: index === currentSceneIndex ? 0x00ff00 : 0x3388ff
-          });
-          const point = new THREE.Mesh(pointGeometry, pointMaterial);
-          point.position.set(scene.center[0], 0, scene.center[2]);
-          point.rotation.x = -Math.PI / 2; // Gira para ficar no plano horizontal
-          point.userData = {
-            type: 'navpoint-minimap',
-            sceneIndex: index
-          };
-          miniMap.add(point);
-          
-          // Se houver mais de uma cena, conecte os pontos com linhas
-          if (index > 0 && scenes[index-1].center) {
-            const prevCenter = scenes[index-1].center;
-            const lineGeometry = new THREE.BufferGeometry().setFromPoints([
-              new THREE.Vector3(prevCenter[0], 0, prevCenter[2]),
-              new THREE.Vector3(scene.center[0], 0, scene.center[2])
-            ]);
-            const lineMaterial = new THREE.LineBasicMaterial({ color: 0x555555 });
-            const line = new THREE.Line(lineGeometry, lineMaterial);
-            line.userData = { type: 'navpoint-minimap' };
-            miniMap.add(line);
-          }
-        }
-      });
-    }
-    
-    // Se tiver planta baixa, adiciona ao mini-mapa
-    if (sceneData && sceneData.files && sceneData.files.floor_plan) {
-      // Carrega a textura da planta baixa
-      const textureLoader = new THREE.TextureLoader();
-      textureLoader.load(sceneData.files.floor_plan, (texture) => {
-        const material = new THREE.MeshBasicMaterial({ 
-          map: texture,
-          transparent: true,
-          opacity: 0.7,
-          side: THREE.DoubleSide
-        });
-        
-        // Tamanho estimado para a planta baixa
-        const width = 15;
-        const height = 15;
-        const geometry = new THREE.PlaneGeometry(width, height);
-        const floorPlan = new THREE.Mesh(geometry, material);
-        
-        // Posiciona no plano horizontal
-        floorPlan.rotation.x = -Math.PI / 2;
-        
-        // Remove planta baixa anterior se existir
-        miniMap.children.forEach(child => {
-          if (child.userData && child.userData.type === 'floorplan-minimap') {
-            miniMap.remove(child);
-          }
-        });
-        
-        floorPlan.userData = { type: 'floorplan-minimap' };
-        miniMap.add(floorPlan);
-      });
-    }
   }
 
-  // Adicionar funcionalidade de captura de tela e compartilhamento
-  function setupShareFeatures() {
-    // Cria o container para os botões de compartilhamento
-    const shareContainer = document.createElement('div');
-    shareContainer.style.position = 'absolute';
-    shareContainer.style.top = '20px';
-    shareContainer.style.right = '20px';
-    shareContainer.style.display = 'flex';
-    shareContainer.style.flexDirection = 'column';
-    shareContainer.style.gap = '10px';
-    shareContainer.style.zIndex = '100';
-    document.body.appendChild(shareContainer);
+  // Modificar a função animate para atualizar os pontos de navegação HTML
+  function animate() {
+    requestAnimationFrame(animate);
     
-    // Botão de captura de tela
-    const screenshotButton = document.createElement('button');
-    screenshotButton.className = 'btn';
-    screenshotButton.innerHTML = '📷';
-    screenshotButton.title = 'Capturar Tela';
-    screenshotButton.addEventListener('click', takeScreenshot);
-    shareContainer.appendChild(screenshotButton);
-    
-    // Botão de compartilhamento
-    const shareButton = document.createElement('button');
-    shareButton.className = 'btn';
-    shareButton.innerHTML = '🔗';
-    shareButton.title = 'Compartilhar';
-    shareButton.addEventListener('click', shareScene);
-    shareContainer.appendChild(shareButton);
-    
-    // Botão de tour virtual
-    const tourButton = document.createElement('button');
-    tourButton.className = 'btn';
-    tourButton.innerHTML = '🎬';
-    tourButton.title = 'Iniciar Tour Virtual';
-    tourButton.addEventListener('click', startGuidedTour);
-    shareContainer.appendChild(tourButton);
-    
-    console.log('Recursos de compartilhamento configurados');
-  }
-
-  // Função para capturar uma imagem da cena atual
-  function takeScreenshot() {
     try {
-      // Oculta elementos da UI temporariamente
-      const elementsToHide = [
-        document.getElementById('info'),
-        document.getElementById('measure-info'),
-        miniMapContainer,
-        document.querySelector('.control-panel')
-      ];
-      
-      elementsToHide.forEach(el => {
-        if (el) el.style.visibility = 'hidden';
-      });
+      // Atualiza os controles
+      controls.update();
       
       // Renderiza a cena
       renderer.render(scene, camera);
       
-      // Captura a imagem
-      const dataURL = renderer.domElement.toDataURL('image/png');
+      // Atualiza posição dos pontos de navegação HTML
+      updateNavPointsPositions();
       
-      // Restaura visibilidade dos elementos
-      elementsToHide.forEach(el => {
-        if (el) el.style.visibility = 'visible';
-      });
+      // Atualiza posição de etiquetas e elementos flutuantes
+      updateLabelsPosition();
       
-      // Cria um link para download da imagem
-      const link = document.createElement('a');
-      link.href = dataURL;
-      link.download = `matterport-clone-${currentSceneData?.name || 'scene'}.png`;
-      link.click();
-      
-      showMessage('Screenshot capturado!');
-    } catch (error) {
-      console.error('Erro ao capturar screenshot:', error);
-      showMessage('Erro ao capturar screenshot');
-    }
-  }
-
-  // Função para compartilhar a cena atual
-  function shareScene() {
-    // Gera URL com parâmetros para a cena atual
-    const url = new URL(window.location.href);
-    
-    // Limpa parâmetros existentes
-    url.search = '';
-    
-    // Adiciona parâmetros para a cena atual
-    if (currentSceneIndex !== undefined) {
-      url.searchParams.set('scene', currentSceneIndex);
-    }
-    
-    // Adiciona posição e orientação da câmera
-    if (camera) {
-      url.searchParams.set('pos', `${camera.position.x.toFixed(2)},${camera.position.y.toFixed(2)},${camera.position.z.toFixed(2)}`);
-      
-      // Adiciona direção da câmera
-      const direction = new THREE.Vector3();
-      camera.getWorldDirection(direction);
-      url.searchParams.set('dir', `${direction.x.toFixed(2)},${direction.y.toFixed(2)},${direction.z.toFixed(2)}`);
-    }
-    
-    // Adiciona modo atual
-    url.searchParams.set('mode', isDollhouseMode ? 'dollhouse' : 'panorama');
-    
-    // Cria caixa de diálogo para compartilhamento
-    const shareDialog = document.createElement('div');
-    shareDialog.style.position = 'fixed';
-    shareDialog.style.top = '50%';
-    shareDialog.style.left = '50%';
-    shareDialog.style.transform = 'translate(-50%, -50%)';
-    shareDialog.style.background = 'rgba(0, 0, 0, 0.9)';
-    shareDialog.style.color = 'white';
-    shareDialog.style.padding = '20px';
-    shareDialog.style.borderRadius = '10px';
-    shareDialog.style.zIndex = '1000';
-    shareDialog.style.maxWidth = '500px';
-    shareDialog.style.width = '80%';
-    shareDialog.style.textAlign = 'center';
-    
-    shareDialog.innerHTML = `
-      <h3>Compartilhar esta Cena</h3>
-      <p>Copie o link abaixo para compartilhar esta visualização exata:</p>
-      <input type="text" value="${url.toString()}" style="width:100%; padding:10px; margin:10px 0; border-radius:5px;" readonly onclick="this.select()">
-      <div style="display:flex; justify-content:center; gap:10px; margin-top:20px;">
-        <button id="copy-link" style="padding:8px 15px; background:#4CAF50; color:white; border:none; border-radius:5px; cursor:pointer;">Copiar Link</button>
-        <button id="close-dialog" style="padding:8px 15px; background:#f44336; color:white; border:none; border-radius:5px; cursor:pointer;">Fechar</button>
-      </div>
-    `;
-    
-    document.body.appendChild(shareDialog);
-    
-    // Adiciona eventos
-    document.getElementById('copy-link').addEventListener('click', () => {
-      const input = shareDialog.querySelector('input');
-      input.select();
-      document.execCommand('copy');
-      showMessage('Link copiado para área de transferência!');
-    });
-    
-    document.getElementById('close-dialog').addEventListener('click', () => {
-      document.body.removeChild(shareDialog);
-    });
-  }
-
-  // Função para iniciar um tour guiado
-  function startGuidedTour() {
-    if (scenes.length < 2) {
-      showMessage('Não há cenas suficientes para um tour');
-      return;
-    }
-    
-    showMessage('Iniciando tour virtual...');
-    
-    // Array para controlar quais cenas já foram visitadas
-    const visitedScenes = new Array(scenes.length).fill(false);
-    visitedScenes[currentSceneIndex] = true;
-    
-    // Função recursiva para visitar próxima cena
-    function visitNextScene() {
-      // Verifica se todas as cenas foram visitadas
-      if (visitedScenes.every(visited => visited)) {
-        showMessage('Tour virtual completo!');
-        return;
+      // Atualiza visualização de medição, se estiver medindo
+      if (isMeasuring && raycaster) {
+        const intersects = getIntersectedObjects();
+        updateMeasurementPreview(intersects);
       }
-      
-      // Encontra cenas adjacentes (próximas) da cena atual
-      const currentCenter = scenes[currentSceneIndex].center;
-      let nearestSceneIndex = -1;
-      let shortestDistance = Infinity;
-      
-      scenes.forEach((scene, index) => {
-        if (!visitedScenes[index] && scene.center) {
-          const distance = Math.sqrt(
-            Math.pow(currentCenter[0] - scene.center[0], 2) +
-            Math.pow(currentCenter[1] - scene.center[1], 2) +
-            Math.pow(currentCenter[2] - scene.center[2], 2)
-          );
-          
-          if (distance < shortestDistance) {
-            shortestDistance = distance;
-            nearestSceneIndex = index;
-          }
-        }
-      });
-      
-      // Se encontrou uma próxima cena
-      if (nearestSceneIndex !== -1) {
-        visitedScenes[nearestSceneIndex] = true;
-        
-        // Navega para a próxima cena
-        setTimeout(() => {
-          navigateToScene(nearestSceneIndex);
-          
-          // Após a transição, agenda a próxima navegação
-          setTimeout(visitNextScene, 5000); // 5 segundos em cada cena
-        }, 1000);
-      } else {
-        showMessage('Tour virtual completo!');
-      }
-    }
-    
-    // Inicia o tour
-    setTimeout(visitNextScene, 2000);
-  }
-
-  // Adicionar função de processamento de parâmetros de URL
-  function processUrlParameters() {
-    console.log('Processando parâmetros da URL...');
-    
-    const urlParams = new URLSearchParams(window.location.search);
-    
-    // Se temos parâmetro de cena, carregamos a cena especificada
-    if (urlParams.has('scene')) {
-      const sceneIndex = parseInt(urlParams.get('scene'));
-      if (!isNaN(sceneIndex) && sceneIndex >= 0 && scenes && sceneIndex < scenes.length) {
-        console.log(`Carregando cena ${sceneIndex} da URL`);
-        setTimeout(() => {
-          navigateToScene(sceneIndex);
-        }, 1000); // Pequeno delay para garantir que a cena inicial foi carregada
-      }
-    }
-    
-    // Se temos parâmetros de posição da câmera
-    if (urlParams.has('pos')) {
-      try {
-        const posValues = urlParams.get('pos').split(',').map(v => parseFloat(v));
-        if (posValues.length === 3 && posValues.every(v => !isNaN(v))) {
-          setTimeout(() => {
-            camera.position.set(posValues[0], posValues[1], posValues[2]);
-            console.log(`Câmera posicionada em [${posValues.join(', ')}] da URL`);
-          }, 1500);
-        }
-      } catch (e) {
-        console.warn('Erro ao processar parâmetro de posição da URL:', e);
-      }
-    }
-    
-    // Se temos parâmetros de direção da câmera
-    if (urlParams.has('dir')) {
-      try {
-        const dirValues = urlParams.get('dir').split(',').map(v => parseFloat(v));
-        if (dirValues.length === 3 && dirValues.every(v => !isNaN(v))) {
-          setTimeout(() => {
-            const lookAt = new THREE.Vector3(
-              camera.position.x + dirValues[0],
-              camera.position.y + dirValues[1],
-              camera.position.z + dirValues[2]
-            );
-            controls.target.copy(lookAt);
-            controls.update();
-            console.log(`Câmera direcionada para [${dirValues.join(', ')}] da URL`);
-          }, 1500);
-        }
-      } catch (e) {
-        console.warn('Erro ao processar parâmetro de direção da URL:', e);
-      }
-    }
-    
-    // Se temos parâmetro de modo (dollhouse ou panorama)
-    if (urlParams.has('mode')) {
-      setTimeout(() => {
-        const mode = urlParams.get('mode').toLowerCase();
-        if (mode === 'dollhouse' && !isDollhouseMode) {
-          toggleDollhouseMode();
-          console.log('Modo dollhouse ativado da URL');
-        } else if (mode === 'panorama' && isDollhouseMode) {
-          toggleDollhouseMode();
-          console.log('Modo panorama ativado da URL');
-        }
-      }, 2000);
-    }
-    
-    // Se temos parâmetro para iniciar tour automático
-    if (urlParams.has('tour') && urlParams.get('tour') === 'true') {
-      setTimeout(() => {
-        startGuidedTour();
-        console.log('Tour automático iniciado da URL');
-      }, 3000);
-    }
-    
-    console.log('Processamento de parâmetros da URL concluído');
-  }
-
-  // Adicionar funcionalidade de incorporação (embed)
-  function setupEmbedFeatures() {
-    // Verifica se estamos em modo incorporado
-    const isEmbedded = window.location.search.includes('embed=true');
-    
-    if (isEmbedded) {
-      console.log('Executando em modo incorporado');
-      
-      // Ajusta estilos para modo incorporado
-      document.body.classList.add('embedded');
-      
-      // Adiciona estilos CSS para modo incorporado
-      const embedStyles = document.createElement('style');
-      embedStyles.textContent = `
-        body.embedded #sidebar {
-          display: none;
-        }
-        body.embedded .control-panel {
-          transform: scale(0.8);
-          bottom: 10px;
-        }
-        body.embedded #mini-map {
-          transform: scale(0.8);
-          bottom: 10px;
-          right: 10px;
-        }
-        body.embedded #info {
-          font-size: 12px;
-          padding: 5px;
-        }
-      `;
-      document.head.appendChild(embedStyles);
-      
-      // Adiciona logo da marca
-      const logoContainer = document.createElement('div');
-      logoContainer.style.position = 'absolute';
-      logoContainer.style.bottom = '10px';
-      logoContainer.style.left = '10px';
-      logoContainer.style.zIndex = '100';
-      logoContainer.style.background = 'rgba(0,0,0,0.5)';
-      logoContainer.style.padding = '5px';
-      logoContainer.style.borderRadius = '5px';
-      
-      logoContainer.innerHTML = '<span style="color:white; font-weight:bold;">Matterport Clone</span>';
-      document.body.appendChild(logoContainer);
-      
-      // Adiciona botão para abrir em modo fullscreen
-      const fullscreenButton = document.createElement('button');
-      fullscreenButton.className = 'btn';
-      fullscreenButton.innerHTML = '🔍';
-      fullscreenButton.title = 'Abrir em tela cheia';
-      fullscreenButton.style.position = 'absolute';
-      fullscreenButton.style.top = '10px';
-      fullscreenButton.style.left = '10px';
-      fullscreenButton.style.zIndex = '100';
-      
-      fullscreenButton.addEventListener('click', () => {
-        const url = new URL(window.location.href);
-        url.searchParams.delete('embed');
-        window.open(url.toString(), '_blank');
-      });
-      
-      document.body.appendChild(fullscreenButton);
-    }
-  }
-
-  // Adicione esta função que estava faltando
-  function updateScenesList() {
-    // Recarrega a lista de cenas para atualizar a cena atual
-    if (scenes && scenes.length > 0) {
-      populateScenesMenu(scenes);
-      console.log('Lista de cenas atualizada após navegação');
+    } catch (e) {
+      console.error('Erro no loop de animação:', e);
     }
   }
 
@@ -3538,6 +2860,53 @@
         background: #0066cc;
       }
       
+      /* Pontos de navegação estilo Matterport */
+      .mp-nav-point {
+        position: absolute;
+        width: 30px;
+        height: 30px;
+        transform: translate(-50%, -50%);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        pointer-events: auto;
+        transition: all 0.2s ease;
+        z-index: 200;
+      }
+      
+      .mp-nav-point-outer {
+        position: absolute;
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        background-color: rgba(255, 255, 255, 0.3);
+        border: 2px solid rgba(255, 255, 255, 0.8);
+        box-shadow: 0 0 8px rgba(0, 0, 0, 0.4);
+        transition: all 0.2s ease;
+      }
+      
+      .mp-nav-point-inner {
+        position: absolute;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background-color: white;
+        transition: all 0.2s ease;
+        box-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
+      }
+      
+      .mp-nav-point-hover .mp-nav-point-outer {
+        background-color: rgba(0, 153, 255, 0.6);
+        border-color: white;
+        transform: scale(1.2);
+      }
+      
+      .mp-nav-point-hover .mp-nav-point-inner {
+        background-color: white;
+        transform: scale(1.1);
+      }
+      
       /* Informações e medições */
       .mp-info-panel {
         position: absolute;
@@ -3572,30 +2941,6 @@
         flex-direction: column;
         gap: 4px;
         align-items: center;
-      }
-      
-      /* Estilo para pontos de navegação (circle dots) */
-      .mp-nav-point {
-        position: absolute;
-        width: 40px;
-        height: 40px;
-        border-radius: 50%;
-        background: rgba(255, 255, 255, 0.5);
-        border: 2px solid white;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: white;
-        font-size: 18px;
-        cursor: pointer;
-        transform: translate(-50%, -50%);
-        transition: all 0.3s;
-        z-index: 500;
-      }
-      
-      .mp-nav-point:hover {
-        background: rgba(0, 150, 255, 0.8);
-        transform: translate(-50%, -50%) scale(1.2);
       }
       
       /* Estilos para o indicador de carregamento */
@@ -3645,6 +2990,7 @@
     
     // Substituindo a classe antiga de botões
     const buttonsConfig = [
+      { id: 'back-button', icon: '⬅️', title: 'Voltar' },
       { id: 'btn-dollhouse', icon: '🏠', title: 'Modo Dollhouse' },
       { id: 'btn-floorplan', icon: '📐', title: 'Planta Baixa' },
       { id: 'btn-measure', icon: '📏', title: 'Medir' },
@@ -3672,6 +3018,7 @@
     document.body.appendChild(controlsContainer);
     
     // Reconectar eventos nos novos botões
+    document.getElementById('back-button').addEventListener('click', navigateBack);
     document.getElementById('btn-dollhouse').addEventListener('click', toggleDollhouseMode);
     document.getElementById('btn-floorplan').addEventListener('click', toggleFloorPlan);
     document.getElementById('btn-measure').addEventListener('click', toggleMeasureMode);
@@ -3679,6 +3026,9 @@
     document.getElementById('btn-tour').addEventListener('click', toggleAutoTour);
     document.getElementById('btn-reset').addEventListener('click', resetView);
     document.getElementById('btn-unified').addEventListener('click', toggleUnifiedMode);
+    
+    // Inicialmente desabilita o botão de voltar
+    updateBackButtonState();
     
     // Criando controles laterais direitos
     const sideControls = document.createElement('div');
@@ -3737,213 +3087,6 @@
       infoEl.style.padding = '10px 15px';
       infoEl.style.fontSize = '14px';
       infoEl.style.fontWeight = '500';
-    }
-  }
-
-  // Melhorar a função createNavigationPoints para usar o estilo do Matterport com pontos HTML
-  function createNavigationPoints() {
-    console.log('Criando pontos de navegação estilo Matterport');
-    
-    // Remover pontos de navegação antigos
-    const oldPoints = document.querySelectorAll('.mp-nav-point');
-    oldPoints.forEach(point => point.remove());
-    
-    // Limpa pontos 3D antigos
-    scene.children.forEach(child => {
-      if (child.userData && child.userData.type === 'navpoint') {
-        scene.remove(child);
-      }
-    });
-    
-    // Detecta o nível do piso
-    const floorLevel = detectFloorLevel();
-    console.log('Nível do piso para pontos de navegação:', floorLevel);
-    
-    // Container para os pontos de navegação HTML
-    const navPointsContainer = document.createElement('div');
-    navPointsContainer.id = 'nav-points-container';
-    navPointsContainer.style.position = 'absolute';
-    navPointsContainer.style.top = '0';
-    navPointsContainer.style.left = '0';
-    navPointsContainer.style.width = '100%';
-    navPointsContainer.style.height = '100%';
-    navPointsContainer.style.pointerEvents = 'none';
-    navPointsContainer.style.zIndex = '200';
-    document.body.appendChild(navPointsContainer);
-    
-    // Cria pontos para cada cena disponível
-    scenes.forEach((sceneData, index) => {
-      if (index === currentSceneIndex) return; // Não cria ponto para a cena atual
-      
-      // Verifica se a cena tem coordenadas
-      if (!sceneData.center) {
-        console.warn(`Cena ${sceneData.name} não tem coordenadas de centro definidas`);
-        return;
-      }
-      
-      const center = sceneData.center;
-      
-      // Calcula a distância entre a cena atual e esta cena
-      let distance = 0;
-      if (currentSceneData && currentSceneData.center) {
-        const currentCenter = currentSceneData.center;
-        distance = Math.sqrt(
-          Math.pow(currentCenter[0] - center[0], 2) +
-          Math.pow(currentCenter[1] - center[1], 2) +
-          Math.pow(currentCenter[2] - center[2], 2)
-        );
-      }
-      
-      // Se a distância for muito grande, não criar ponto de navegação
-      const MAX_NAV_DISTANCE = 50; // Ajuste conforme necessário para o seu espaço
-      if (distance > MAX_NAV_DISTANCE) {
-        console.log(`Ponto de navegação para ${sceneData.name} ignorado: distância ${distance.toFixed(2)}m (muito longe)`);
-        return;
-      }
-      
-      console.log(`Criando ponto de navegação para ${sceneData.name} a ${distance.toFixed(2)}m de distância`);
-      
-      // Posição do ponto
-      const position = new THREE.Vector3(
-        center[0],
-        floorLevel + 0.01, // Ligeiramente acima do piso
-        center[2]
-      );
-      
-      // Cria o ponto de navegação HTML em vez de 3D
-      createHtmlNavPoint(position, sceneData.name, index, distance);
-      
-      // Ainda mantém um ponto 3D invisível para raycasting
-      const circleGeometry = new THREE.CircleGeometry(0.1, 16);
-      const circleMaterial = new THREE.MeshBasicMaterial({
-        color: 0x00aaff,
-        transparent: true,
-        opacity: 0.0, // Invisível
-        side: THREE.DoubleSide
-      });
-      
-      const navCircle = new THREE.Mesh(circleGeometry, circleMaterial);
-      navCircle.rotation.x = -Math.PI / 2;
-      navCircle.position.copy(position);
-      navCircle.userData = {
-        type: 'navpoint',
-        targetScene: index,
-        name: sceneData.name,
-        distance: distance
-      };
-      scene.add(navCircle);
-    });
-  }
-
-  // Função para criar ponto de navegação HTML estilo Matterport
-  function createHtmlNavPoint(position3D, name, sceneIndex, distance) {
-    // Converte posição 3D para coordenadas de tela
-    const vector = position3D.clone();
-    vector.project(camera);
-    
-    // Coordenadas de tela
-    const x = (vector.x * 0.5 + 0.5) * window.innerWidth;
-    const y = (vector.y * -0.5 + 0.5) * window.innerHeight;
-    
-    // Verificar se o ponto está na frente da câmera e dentro da tela
-    if (vector.z > 1 || x < 0 || x > window.innerWidth || y < 0 || y > window.innerHeight) {
-      // Ponto está atrás da câmera ou fora da tela, não exibir
-      return;
-    }
-    
-    // Criar elemento HTML para o ponto de navegação
-    const navPoint = document.createElement('div');
-    navPoint.className = 'mp-nav-point';
-    navPoint.innerHTML = '•'; // Usar um ponto como ícone
-    navPoint.setAttribute('data-scene-index', sceneIndex);
-    navPoint.setAttribute('data-name', name);
-    navPoint.setAttribute('data-distance', distance.toFixed(1));
-    
-    // Posicionar o elemento na tela
-    navPoint.style.left = `${x}px`;
-    navPoint.style.top = `${y}px`;
-    
-    // Adicionar tooltip com informações
-    navPoint.title = `${name} (${distance.toFixed(1)}m)`;
-    
-    // Adicionar evento de clique
-    navPoint.style.pointerEvents = 'auto';
-    navPoint.addEventListener('click', () => {
-      navigateToScene(sceneIndex);
-    });
-    
-    // Adicionar ao container
-    const container = document.getElementById('nav-points-container');
-    if (container) {
-      container.appendChild(navPoint);
-    } else {
-      document.body.appendChild(navPoint);
-    }
-    
-    return navPoint;
-  }
-
-  // Função para atualizar os pontos de navegação HTML quando a câmera se move
-  function updateNavPointsPositions() {
-    const navPoints = document.querySelectorAll('.mp-nav-point');
-    if (navPoints.length === 0) return;
-    
-    navPoints.forEach(point => {
-      const sceneIndex = parseInt(point.getAttribute('data-scene-index'));
-      const sceneData = scenes[sceneIndex];
-      
-      if (!sceneData || !sceneData.center) return;
-      
-      const floorLevel = detectFloorLevel();
-      const position3D = new THREE.Vector3(
-        sceneData.center[0],
-        floorLevel + 0.01,
-        sceneData.center[2]
-      );
-      
-      // Converte posição 3D para coordenadas de tela
-      const vector = position3D.clone();
-      vector.project(camera);
-      
-      // Coordenadas de tela
-      const x = (vector.x * 0.5 + 0.5) * window.innerWidth;
-      const y = (vector.y * -0.5 + 0.5) * window.innerHeight;
-      
-      // Oculta pontos que estão atrás da câmera ou fora da tela
-      if (vector.z > 1 || x < 0 || x > window.innerWidth || y < 0 || y > window.innerHeight) {
-        point.style.display = 'none';
-      } else {
-        point.style.display = 'flex';
-        point.style.left = `${x}px`;
-        point.style.top = `${y}px`;
-      }
-    });
-  }
-
-  // Modificar a função animate para atualizar os pontos de navegação HTML
-  function animate() {
-    requestAnimationFrame(animate);
-    
-    try {
-      // Atualiza os controles
-      controls.update();
-      
-      // Renderiza a cena
-      renderer.render(scene, camera);
-      
-      // Atualiza posição dos pontos de navegação HTML
-      updateNavPointsPositions();
-      
-      // Atualiza posição de etiquetas e elementos flutuantes
-      updateLabelsPosition();
-      
-      // Atualiza visualização de medição, se estiver medindo
-      if (isMeasuring && raycaster) {
-        const intersects = getIntersectedObjects();
-        updateMeasurementPreview(intersects);
-      }
-    } catch (e) {
-      console.error('Erro no loop de animação:', e);
     }
   }
 
