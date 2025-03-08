@@ -90,9 +90,9 @@ function extractCoordinates(metadataFile) {
     });
 }
 
-// Detecta e mapeia panorâmicas associadas a uma cena
-function findPanoramicImage(sceneDir, sceneName) {
-  const panoramaDir = path.join(__dirname, 'input_data', 'panorama');
+// Função para verificar melhor as panorâmicas, com mais tentativas de encontrar correspondências
+function findPanoramicImageImproved(sceneDir, sceneName) {
+  const panoramaDir = path.join(__dirname, 'input', 'panorama');
   let panoramaUrl = null;
   
   // Verifica se existe diretório de panoramas
@@ -100,50 +100,65 @@ function findPanoramicImage(sceneDir, sceneName) {
     try {
       const panoramaFiles = fs.readdirSync(panoramaDir);
       
-      // Prioridade de extensões
-      const extensions = ['.jpg', '.jpeg', '.png'];
+      // Preparar o nome da cena para várias tentativas de correspondência
+      // 1. Remova qualquer prefixo como "__" 
+      let cleanSceneName = sceneName.replace(/^__/, '');
       
-      // Tenta encontrar imagem com o mesmo nome da cena
-      for (const ext of extensions) {
-        const matchingFile = panoramaFiles.find(file => {
-          const baseName = path.parse(file).name.toLowerCase();
-          return baseName === sceneName.toLowerCase();
-        });
-        
-        if (matchingFile) {
-          panoramaUrl = `/input_data/panorama/${matchingFile}`;
-          break;
-        }
-      }
+      // 2. Extrair apenas os números, se existirem
+      const sceneNumbers = cleanSceneName.match(/\d+/g);
       
-      // Se não encontrou pelo nome, verifica se há nomes semelhantes
-      if (!panoramaUrl) {
-        const matchingFile = panoramaFiles.find(file => 
-          file.toLowerCase().includes(sceneName.toLowerCase())
-        );
-        
-        if (matchingFile) {
-          panoramaUrl = `/input_data/panorama/${matchingFile}`;
-        }
-      }
+      // Criar um array de possíveis correspondências para tentar
+      const possibleMatches = [
+        sceneName.toLowerCase(),                   // Nome exato
+        cleanSceneName.toLowerCase(),              // Nome sem prefixo
+        sceneNumbers ? sceneNumbers[0] : null,     // Apenas os números
+        cleanSceneName.toLowerCase().replace(/^scan_/i, '')  // Remove "Scan_" do início
+      ].filter(Boolean); // Remove valores nulos
       
-      // Se ainda não encontrou, procura por um arquivo numerado da mesma sequência
-      if (!panoramaUrl) {
-        // Extrair número da cena se existir (ex. Scan_001 -> 001)
-        const sceneNumber = sceneName.match(/(\d+)$/);
+      console.log(`Tentando encontrar panorâmica para: ${sceneName}`);
+      console.log(`Possíveis correspondências: ${possibleMatches.join(', ')}`);
+      
+      // Verificar cada arquivo contra todas as possíveis correspondências
+      for (const file of panoramaFiles) {
+        const fileName = file.toLowerCase();
+        const fileBaseName = path.parse(fileName).name;
         
-        if (sceneNumber && sceneNumber[1]) {
-          const num = sceneNumber[1];
-          const matchingFile = panoramaFiles.find(file => file.includes(num));
-          
-          if (matchingFile) {
-            panoramaUrl = `/input_data/panorama/${matchingFile}`;
+        for (const match of possibleMatches) {
+          // Verifica se o nome do arquivo contém a correspondência ou vice-versa
+          if (fileBaseName.includes(match) || match.includes(fileBaseName)) {
+            panoramaUrl = `/input/panorama/${file}`;
+            console.log(`✅ Panorâmica encontrada: ${file} para cena ${sceneName}`);
+            return panoramaUrl;
           }
         }
       }
+      
+      // Se não encontrou, tentar encontrar um arquivo com número próximo
+      if (!panoramaUrl && sceneNumbers && sceneNumbers.length > 0) {
+        const sceneNumber = parseInt(sceneNumbers[0]);
+        
+        // Procurar arquivos com números próximos (±1)
+        for (const file of panoramaFiles) {
+          const fileBaseName = path.parse(file).name;
+          const fileNumbers = fileBaseName.match(/\d+/g);
+          
+          if (fileNumbers && fileNumbers.length > 0) {
+            const fileNumber = parseInt(fileNumbers[0]);
+            if (Math.abs(fileNumber - sceneNumber) <= 1) {
+              panoramaUrl = `/input/panorama/${file}`;
+              console.log(`✅ Panorâmica com número próximo encontrada: ${file} para cena ${sceneName}`);
+              return panoramaUrl;
+            }
+          }
+        }
+      }
+      
+      console.warn(`⚠️ Nenhuma panorâmica encontrada para cena: ${sceneName}`);
     } catch (err) {
       console.error('Erro ao procurar panorâmicas:', err);
     }
+  } else {
+    console.warn(`Diretório de panorâmicas não encontrado: ${panoramaDir}`);
   }
   
   return panoramaUrl;
@@ -206,76 +221,18 @@ async function collectSceneData() {
           scene.files.floor_plan = `/output/${folder}/floor_plan.png`;
         }
         
-        // Verifica se há panorâmicas disponíveis
-        // Primeiro verifica na pasta de panoramas
-        const panoramaFolder = path.join(panoramaDir, folder);
-        if (fs.existsSync(panoramaFolder)) {
-          const panoramaFiles = fs.readdirSync(panoramaFolder)
-            .filter(file => file.endsWith('.jpg') || file.endsWith('.png'));
-          
-          if (panoramaFiles.length > 0) {
-            scene.files.panorama = `/input/panorama/${folder}/${panoramaFiles[0]}`;
-            console.log(`Panorama encontrado para ${folder}: ${panoramaFiles[0]}`);
-          }
-        } else {
-          // Se não encontrou pasta específica, procura por qualquer arquivo com mesmo nome
-          const panoramaFiles = fs.readdirSync(panoramaDir)
-            .filter(file => (file.endsWith('.jpg') || file.endsWith('.png')) && 
-                           file.toLowerCase().includes(folder.toLowerCase()));
-          
-          // Se não encontrou, tenta remover o prefixo '__' do nome da pasta
-          if (panoramaFiles.length === 0 && folder.startsWith('__')) {
-            const scanName = folder.substring(2); // Remove o prefixo '__'
-            const scanPanoramaFiles = fs.readdirSync(panoramaDir)
-              .filter(file => (file.endsWith('.jpg') || file.endsWith('.png')) && 
-                             file.toLowerCase().includes(scanName.toLowerCase()));
-            
-            if (scanPanoramaFiles.length > 0) {
-              scene.files.panorama = `/input/panorama/${scanPanoramaFiles[0]}`;
-              console.log(`Panorama encontrado para ${folder} usando nome sem prefixo: ${scanPanoramaFiles[0]}`);
-            }
-          } else 
-          if (panoramaFiles.length > 0) {
-            scene.files.panorama = `/input/panorama/${panoramaFiles[0]}`;
-            console.log(`Panorama correspondente para ${folder}: ${panoramaFiles[0]}`);
-          }
+        // Procura panorâmica associada usando a função melhorada
+        const panoramaUrl = findPanoramicImageImproved(folder, folder);
+        if (panoramaUrl) {
+          scene.files.panorama = panoramaUrl;
         }
         
-        // Se não encontrou panorama, verifica no TrueView
+        // Se ainda não encontrou panorama, verifica no TrueView
         if (!scene.files.panorama) {
           // Verifica se o nome da pasta do TrueView corresponde ao nome da cena
-          const trueviewFolder = path.join(trueviewDir, folder);
-          if (fs.existsSync(trueviewFolder)) {
-            // Procura pelo arquivo de configuração do cubemap
-            const configFiles = fs.readdirSync(trueviewFolder)
-              .filter(file => file.includes('cubemap') && file.endsWith('.json'));
-            
-            if (configFiles.length > 0) {
-              scene.files.cubemap = {
-                config: `/input/trueview/${folder}/${configFiles[0]}`,
-                folder: `/input/trueview/${folder}/`
-              };
-              console.log(`Cubemap TrueView encontrado para ${folder}: ${configFiles[0]}`);
-            }
-          } else {
-            // Se não encontrou pasta específica, procura por qualquer pasta com mesmo nome
-            const trueviewFolders = fs.readdirSync(trueviewDir)
-              .filter(dir => fs.statSync(path.join(trueviewDir, dir)).isDirectory() && 
-                            dir.toLowerCase().includes(folder.toLowerCase()));
-            
-            if (trueviewFolders.length > 0) {
-              const tvFolder = trueviewFolders[0];
-              const configFiles = fs.readdirSync(path.join(trueviewDir, tvFolder))
-                .filter(file => file.includes('cubemap') && file.endsWith('.json'));
-              
-              if (configFiles.length > 0) {
-                scene.files.cubemap = {
-                  config: `/input/trueview/${tvFolder}/${configFiles[0]}`,
-                  folder: `/input/trueview/${tvFolder}/`
-                };
-                console.log(`Cubemap TrueView correspondente para ${folder}: ${tvFolder}/${configFiles[0]}`);
-              }
-            }
+          const trueviewData = findTrueViewData(folder);
+          if (trueviewData) {
+            scene.files.cubemap = trueviewData;
           }
         }
         

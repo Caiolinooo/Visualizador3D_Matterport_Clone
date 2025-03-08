@@ -81,6 +81,9 @@
     // Adiciona suporte para incorporação
     setupEmbedFeatures();
     
+    // Aplica estilo visual do Matterport
+    setupMatterportStyle();
+    
     // Inicia o loop de renderização
     animate();
     
@@ -123,10 +126,14 @@
   // Configuração da cena Three.js
   function setupScene() {
     scene = new THREE.Scene();
+    
+    // Fundo preto para o modo dollhouse, mas transparente para o modo panorama
     scene.background = new THREE.Color(0x000000);
     
-    // Remove a neblina que pode causar cálculos extra desnecessários
-    // scene.fog = new THREE.FogExp2(0x000000, 0.002);
+    // Adiciona névoa para dar profundidade à cena
+    scene.fog = new THREE.FogExp2(0x000000, 0.00025);
+    
+    console.log('Cena configurada com iluminação e névoa para profundidade');
   }
   
   // Configuração da câmera
@@ -145,12 +152,25 @@
   
   // Adiciona luzes à cena
   function setupLights() {
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+    // Luz ambiente suave
+    const ambientLight = new THREE.AmbientLight(0x404040, 1.0);
     scene.add(ambientLight);
     
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
-    directionalLight.position.set(1, 1, 1);
-    scene.add(directionalLight);
+    // Luz direcional principal (sol)
+    const mainLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    mainLight.position.set(1, 1, 0.5);
+    scene.add(mainLight);
+    
+    // Luz direcional secundária para preencher sombras
+    const fillLight = new THREE.DirectionalLight(0xffffff, 0.4);
+    fillLight.position.set(-1, 0.5, -0.5);
+    scene.add(fillLight);
+    
+    // Luz hemisférica para simular luz de ambiente
+    const hemiLight = new THREE.HemisphereLight(0xffffbb, 0x080820, 0.5);
+    scene.add(hemiLight);
+    
+    console.log('Iluminação aprimorada configurada');
   }
   
   // Configuração dos controles OrbitControls
@@ -736,13 +756,64 @@
       function(geometry) {
         console.log(`Nuvem carregada: ${geometry.attributes.position.count} pontos`);
         
-        // Cria Material para os pontos
+        // Cria Material para os pontos - ajustando para melhor visualização
         const material = new THREE.PointsMaterial({
-          size: 0.02,
+          size: 0.015, // Tamanho menor dos pontos para visualização mais precisa
           vertexColors: true,
           transparent: true,
-          opacity: 0.8
+          opacity: 0.85, // Um pouco de transparência para ver estruturas internas
+          depthWrite: false, // Ajuda a evitar artefatos visuais com pontos
+          sizeAttenuation: true, // Pontos mais distantes aparecem menores
+          blending: THREE.NormalBlending
         });
+        
+        // Verifica se há cores, senão cria cores baseadas na altura
+        if (!geometry.attributes.color || geometry.attributes.color.count === 0) {
+          console.log('Nuvem sem cores: gerando cores baseadas na altura');
+          
+          // Cria um atributo de cor
+          const positions = geometry.attributes.position.array;
+          const count = geometry.attributes.position.count;
+          const colors = new Float32Array(count * 3);
+          
+          // Encontra limites min/max de Y (altura)
+          let minY = Infinity;
+          let maxY = -Infinity;
+          
+          for (let i = 0; i < count; i++) {
+            const y = positions[i * 3 + 1];
+            minY = Math.min(minY, y);
+            maxY = Math.max(maxY, y);
+          }
+          
+          const range = maxY - minY;
+          
+          // Gera cores baseadas na altura (azul para baixo, verde para meio, vermelho para cima)
+          for (let i = 0; i < count; i++) {
+            const y = positions[i * 3 + 1];
+            const normalizedHeight = (y - minY) / range;
+            
+            // Esquema de cores estilo Matterport
+            if (normalizedHeight < 0.25) {
+              // Azul para áreas mais baixas (piso)
+              colors[i * 3] = 0.2;
+              colors[i * 3 + 1] = 0.4;
+              colors[i * 3 + 2] = 0.8;
+            } else if (normalizedHeight < 0.75) {
+              // Verde para áreas médias (móveis, objetos)
+              colors[i * 3] = 0.2;
+              colors[i * 3 + 1] = 0.8;
+              colors[i * 3 + 2] = 0.4;
+            } else {
+              // Vermelho/laranja para áreas altas (teto)
+              colors[i * 3] = 0.8;
+              colors[i * 3 + 1] = 0.4;
+              colors[i * 3 + 2] = 0.2;
+            }
+          }
+          
+          geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        }
         
         // Cria a nuvem de pontos
         const pointCloud = new THREE.Points(geometry, material);
@@ -2945,6 +3016,499 @@
     if (scenes && scenes.length > 0) {
       populateScenesMenu(scenes);
       console.log('Lista de cenas atualizada após navegação');
+    }
+  }
+
+  // Adicionar interface estilo Matterport oficial
+  function setupMatterportStyle() {
+    console.log('Configurando interface estilo Matterport');
+    
+    // Remove estilos antigos, se existirem
+    const oldStyles = document.getElementById('matterport-styles');
+    if (oldStyles) {
+      oldStyles.remove();
+    }
+    
+    // Adiciona novos estilos CSS
+    const style = document.createElement('style');
+    style.id = 'matterport-styles';
+    style.textContent = `
+      /* Estilos gerais do Matterport */
+      body {
+        margin: 0;
+        font-family: 'Roboto', Arial, sans-serif;
+        overflow: hidden;
+        background: #000;
+      }
+      
+      /* Barra de navegação superior */
+      .mp-top-bar {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 60px;
+        background: rgba(0, 0, 0, 0.5);
+        backdrop-filter: blur(10px);
+        display: flex;
+        align-items: center;
+        padding: 0 20px;
+        z-index: 1000;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      }
+      
+      .mp-logo {
+        color: white;
+        font-weight: 700;
+        font-size: 18px;
+      }
+      
+      /* Controles centrais inferiores */
+      .mp-controls {
+        position: absolute;
+        bottom: 30px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 8px;
+        background: rgba(0, 0, 0, 0.7);
+        border-radius: 50px;
+        padding: 8px;
+        z-index: 1000;
+        backdrop-filter: blur(10px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+      }
+      
+      .mp-btn {
+        width: 48px;
+        height: 48px;
+        border-radius: 50%;
+        border: none;
+        background: #333;
+        color: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        font-size: 20px;
+        transition: all 0.2s;
+      }
+      
+      .mp-btn:hover {
+        background: #444;
+        transform: scale(1.05);
+      }
+      
+      .mp-btn.active {
+        background: #0066cc;
+      }
+      
+      /* Informações e medições */
+      .mp-info-panel {
+        position: absolute;
+        top: 70px;
+        right: 10px;
+        background: rgba(0, 0, 0, 0.7);
+        color: white;
+        padding: 12px;
+        border-radius: 8px;
+        font-size: 14px;
+        max-width: 300px;
+        z-index: 900;
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        display: none;
+      }
+      
+      /* Controles direitos */
+      .mp-side-controls {
+        position: absolute;
+        right: 20px;
+        top: 50%;
+        transform: translateY(-50%);
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        z-index: 900;
+      }
+      
+      .mp-dolly-controls {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        align-items: center;
+      }
+      
+      /* Estilo para pontos de navegação (circle dots) */
+      .mp-nav-point {
+        position: absolute;
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.5);
+        border: 2px solid white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 18px;
+        cursor: pointer;
+        transform: translate(-50%, -50%);
+        transition: all 0.3s;
+        z-index: 500;
+      }
+      
+      .mp-nav-point:hover {
+        background: rgba(0, 150, 255, 0.8);
+        transform: translate(-50%, -50%) scale(1.2);
+      }
+      
+      /* Estilos para o indicador de carregamento */
+      .mp-loading {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.8);
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        z-index: 2000;
+        color: white;
+      }
+      
+      .mp-spinner {
+        width: 50px;
+        height: 50px;
+        border: 5px solid rgba(255,255,255,0.3);
+        border-radius: 50%;
+        border-top-color: white;
+        animation: spin 1s ease-in-out infinite;
+        margin-bottom: 20px;
+      }
+      
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+    `;
+    
+    document.head.appendChild(style);
+    
+    // Criando a barra superior
+    const topBar = document.createElement('div');
+    topBar.className = 'mp-top-bar';
+    topBar.innerHTML = `
+      <div class="mp-logo">Matterport Clone</div>
+    `;
+    document.body.appendChild(topBar);
+    
+    // Criando controles centrais inferiores estilo Matterport
+    const controlsContainer = document.createElement('div');
+    controlsContainer.className = 'mp-controls';
+    
+    // Substituindo a classe antiga de botões
+    const buttonsConfig = [
+      { id: 'btn-dollhouse', icon: '🏠', title: 'Modo Dollhouse' },
+      { id: 'btn-floorplan', icon: '📐', title: 'Planta Baixa' },
+      { id: 'btn-measure', icon: '📏', title: 'Medir' },
+      { id: 'btn-tags', icon: '🏷️', title: 'Anotações' },
+      { id: 'btn-tour', icon: '🔄', title: 'Tour Automático' },
+      { id: 'btn-reset', icon: '🔙', title: 'Resetar Visualização' },
+      { id: 'btn-unified', icon: '🌐', title: 'Alternar Modo Unificado' }
+    ];
+    
+    buttonsConfig.forEach(btn => {
+      const button = document.createElement('button');
+      button.id = btn.id;
+      button.className = 'mp-btn';
+      button.innerHTML = btn.icon;
+      button.title = btn.title;
+      controlsContainer.appendChild(button);
+    });
+    
+    // Remove o painel de controle antigo, se existir
+    const oldPanel = document.querySelector('.control-panel');
+    if (oldPanel) {
+      oldPanel.remove();
+    }
+    
+    document.body.appendChild(controlsContainer);
+    
+    // Reconectar eventos nos novos botões
+    document.getElementById('btn-dollhouse').addEventListener('click', toggleDollhouseMode);
+    document.getElementById('btn-floorplan').addEventListener('click', toggleFloorPlan);
+    document.getElementById('btn-measure').addEventListener('click', toggleMeasureMode);
+    document.getElementById('btn-tags').addEventListener('click', toggleTagMode);
+    document.getElementById('btn-tour').addEventListener('click', toggleAutoTour);
+    document.getElementById('btn-reset').addEventListener('click', resetView);
+    document.getElementById('btn-unified').addEventListener('click', toggleUnifiedMode);
+    
+    // Criando controles laterais direitos
+    const sideControls = document.createElement('div');
+    sideControls.className = 'mp-side-controls';
+    
+    // Botões para captura de tela e compartilhamento
+    const shareBtn = document.createElement('button');
+    shareBtn.className = 'mp-btn';
+    shareBtn.innerHTML = '🔗';
+    shareBtn.title = 'Compartilhar';
+    shareBtn.addEventListener('click', shareScene);
+    sideControls.appendChild(shareBtn);
+    
+    const screenBtn = document.createElement('button');
+    screenBtn.className = 'mp-btn';
+    screenBtn.innerHTML = '📷';
+    screenBtn.title = 'Capturar Tela';
+    screenBtn.addEventListener('click', takeScreenshot);
+    sideControls.appendChild(screenBtn);
+    
+    document.body.appendChild(sideControls);
+    
+    // Substituir o indicador de carregamento
+    const oldLoading = document.getElementById('loading-overlay');
+    if (oldLoading) {
+      oldLoading.remove();
+    }
+    
+    const loadingOverlay = document.createElement('div');
+    loadingOverlay.className = 'mp-loading';
+    loadingOverlay.id = 'loading-overlay';
+    loadingOverlay.style.display = 'none';
+    loadingOverlay.innerHTML = `
+      <div class="mp-spinner"></div>
+      <div id="loading-message">Carregando...</div>
+    `;
+    document.body.appendChild(loadingOverlay);
+    
+    console.log('Interface estilo Matterport configurada');
+    
+    // Atualiza o estilo do mini-mapa para combinar com o Matterport
+    if (miniMapContainer) {
+      miniMapContainer.style.borderRadius = '8px';
+      miniMapContainer.style.overflow = 'hidden';
+      miniMapContainer.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.5)';
+      miniMapContainer.style.border = '1px solid rgba(255, 255, 255, 0.2)';
+    }
+    
+    // Atualiza o estilo das mensagens
+    const infoEl = document.getElementById('info');
+    if (infoEl) {
+      infoEl.style.background = 'rgba(0, 0, 0, 0.6)';
+      infoEl.style.backdropFilter = 'blur(10px)';
+      infoEl.style.borderRadius = '8px';
+      infoEl.style.border = '1px solid rgba(255, 255, 255, 0.1)';
+      infoEl.style.padding = '10px 15px';
+      infoEl.style.fontSize = '14px';
+      infoEl.style.fontWeight = '500';
+    }
+  }
+
+  // Melhorar a função createNavigationPoints para usar o estilo do Matterport com pontos HTML
+  function createNavigationPoints() {
+    console.log('Criando pontos de navegação estilo Matterport');
+    
+    // Remover pontos de navegação antigos
+    const oldPoints = document.querySelectorAll('.mp-nav-point');
+    oldPoints.forEach(point => point.remove());
+    
+    // Limpa pontos 3D antigos
+    scene.children.forEach(child => {
+      if (child.userData && child.userData.type === 'navpoint') {
+        scene.remove(child);
+      }
+    });
+    
+    // Detecta o nível do piso
+    const floorLevel = detectFloorLevel();
+    console.log('Nível do piso para pontos de navegação:', floorLevel);
+    
+    // Container para os pontos de navegação HTML
+    const navPointsContainer = document.createElement('div');
+    navPointsContainer.id = 'nav-points-container';
+    navPointsContainer.style.position = 'absolute';
+    navPointsContainer.style.top = '0';
+    navPointsContainer.style.left = '0';
+    navPointsContainer.style.width = '100%';
+    navPointsContainer.style.height = '100%';
+    navPointsContainer.style.pointerEvents = 'none';
+    navPointsContainer.style.zIndex = '200';
+    document.body.appendChild(navPointsContainer);
+    
+    // Cria pontos para cada cena disponível
+    scenes.forEach((sceneData, index) => {
+      if (index === currentSceneIndex) return; // Não cria ponto para a cena atual
+      
+      // Verifica se a cena tem coordenadas
+      if (!sceneData.center) {
+        console.warn(`Cena ${sceneData.name} não tem coordenadas de centro definidas`);
+        return;
+      }
+      
+      const center = sceneData.center;
+      
+      // Calcula a distância entre a cena atual e esta cena
+      let distance = 0;
+      if (currentSceneData && currentSceneData.center) {
+        const currentCenter = currentSceneData.center;
+        distance = Math.sqrt(
+          Math.pow(currentCenter[0] - center[0], 2) +
+          Math.pow(currentCenter[1] - center[1], 2) +
+          Math.pow(currentCenter[2] - center[2], 2)
+        );
+      }
+      
+      // Se a distância for muito grande, não criar ponto de navegação
+      const MAX_NAV_DISTANCE = 50; // Ajuste conforme necessário para o seu espaço
+      if (distance > MAX_NAV_DISTANCE) {
+        console.log(`Ponto de navegação para ${sceneData.name} ignorado: distância ${distance.toFixed(2)}m (muito longe)`);
+        return;
+      }
+      
+      console.log(`Criando ponto de navegação para ${sceneData.name} a ${distance.toFixed(2)}m de distância`);
+      
+      // Posição do ponto
+      const position = new THREE.Vector3(
+        center[0],
+        floorLevel + 0.01, // Ligeiramente acima do piso
+        center[2]
+      );
+      
+      // Cria o ponto de navegação HTML em vez de 3D
+      createHtmlNavPoint(position, sceneData.name, index, distance);
+      
+      // Ainda mantém um ponto 3D invisível para raycasting
+      const circleGeometry = new THREE.CircleGeometry(0.1, 16);
+      const circleMaterial = new THREE.MeshBasicMaterial({
+        color: 0x00aaff,
+        transparent: true,
+        opacity: 0.0, // Invisível
+        side: THREE.DoubleSide
+      });
+      
+      const navCircle = new THREE.Mesh(circleGeometry, circleMaterial);
+      navCircle.rotation.x = -Math.PI / 2;
+      navCircle.position.copy(position);
+      navCircle.userData = {
+        type: 'navpoint',
+        targetScene: index,
+        name: sceneData.name,
+        distance: distance
+      };
+      scene.add(navCircle);
+    });
+  }
+
+  // Função para criar ponto de navegação HTML estilo Matterport
+  function createHtmlNavPoint(position3D, name, sceneIndex, distance) {
+    // Converte posição 3D para coordenadas de tela
+    const vector = position3D.clone();
+    vector.project(camera);
+    
+    // Coordenadas de tela
+    const x = (vector.x * 0.5 + 0.5) * window.innerWidth;
+    const y = (vector.y * -0.5 + 0.5) * window.innerHeight;
+    
+    // Verificar se o ponto está na frente da câmera e dentro da tela
+    if (vector.z > 1 || x < 0 || x > window.innerWidth || y < 0 || y > window.innerHeight) {
+      // Ponto está atrás da câmera ou fora da tela, não exibir
+      return;
+    }
+    
+    // Criar elemento HTML para o ponto de navegação
+    const navPoint = document.createElement('div');
+    navPoint.className = 'mp-nav-point';
+    navPoint.innerHTML = '•'; // Usar um ponto como ícone
+    navPoint.setAttribute('data-scene-index', sceneIndex);
+    navPoint.setAttribute('data-name', name);
+    navPoint.setAttribute('data-distance', distance.toFixed(1));
+    
+    // Posicionar o elemento na tela
+    navPoint.style.left = `${x}px`;
+    navPoint.style.top = `${y}px`;
+    
+    // Adicionar tooltip com informações
+    navPoint.title = `${name} (${distance.toFixed(1)}m)`;
+    
+    // Adicionar evento de clique
+    navPoint.style.pointerEvents = 'auto';
+    navPoint.addEventListener('click', () => {
+      navigateToScene(sceneIndex);
+    });
+    
+    // Adicionar ao container
+    const container = document.getElementById('nav-points-container');
+    if (container) {
+      container.appendChild(navPoint);
+    } else {
+      document.body.appendChild(navPoint);
+    }
+    
+    return navPoint;
+  }
+
+  // Função para atualizar os pontos de navegação HTML quando a câmera se move
+  function updateNavPointsPositions() {
+    const navPoints = document.querySelectorAll('.mp-nav-point');
+    if (navPoints.length === 0) return;
+    
+    navPoints.forEach(point => {
+      const sceneIndex = parseInt(point.getAttribute('data-scene-index'));
+      const sceneData = scenes[sceneIndex];
+      
+      if (!sceneData || !sceneData.center) return;
+      
+      const floorLevel = detectFloorLevel();
+      const position3D = new THREE.Vector3(
+        sceneData.center[0],
+        floorLevel + 0.01,
+        sceneData.center[2]
+      );
+      
+      // Converte posição 3D para coordenadas de tela
+      const vector = position3D.clone();
+      vector.project(camera);
+      
+      // Coordenadas de tela
+      const x = (vector.x * 0.5 + 0.5) * window.innerWidth;
+      const y = (vector.y * -0.5 + 0.5) * window.innerHeight;
+      
+      // Oculta pontos que estão atrás da câmera ou fora da tela
+      if (vector.z > 1 || x < 0 || x > window.innerWidth || y < 0 || y > window.innerHeight) {
+        point.style.display = 'none';
+      } else {
+        point.style.display = 'flex';
+        point.style.left = `${x}px`;
+        point.style.top = `${y}px`;
+      }
+    });
+  }
+
+  // Modificar a função animate para atualizar os pontos de navegação HTML
+  function animate() {
+    requestAnimationFrame(animate);
+    
+    try {
+      // Atualiza os controles
+      controls.update();
+      
+      // Renderiza a cena
+      renderer.render(scene, camera);
+      
+      // Atualiza posição dos pontos de navegação HTML
+      updateNavPointsPositions();
+      
+      // Atualiza posição de etiquetas e elementos flutuantes
+      updateLabelsPosition();
+      
+      // Atualiza visualização de medição, se estiver medindo
+      if (isMeasuring && raycaster) {
+        const intersects = getIntersectedObjects();
+        updateMeasurementPreview(intersects);
+      }
+    } catch (e) {
+      console.error('Erro no loop de animação:', e);
     }
   }
 
