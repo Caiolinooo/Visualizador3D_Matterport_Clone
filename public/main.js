@@ -3222,4 +3222,47 @@
         break;
     }
   }
+
+  // Função para lidar com cliques nos pontos de navegação
+  function handleNavPointClick(event) {
+    // Converte coordenadas do mouse para coordenadas normalizadas (-1 a 1)
+    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+    
+    // Configura o raycaster
+    raycaster.setFromCamera(mouse, camera);
+    
+    // Encontra objetos que intersectam com o raio
+    const intersects = raycaster.intersectObjects(scene.children, true);
+    
+    // Verifica se clicou em algum ponto de navegação
+    for (let i = 0; i < intersects.length; i++) {
+      const object = intersects[i].object;
+      
+      // Verifica se é um ponto de navegação
+      if (object.userData && object.userData.type === 'navpoint') {
+        const targetScene = object.userData.targetScene;
+        console.log(`Clique em ponto de navegação para cena ${targetScene}`);
+        
+        // Navega para a cena correspondente
+        navigateToScene(targetScene);
+        return true;
+      }
+    }
+    
+    // Verifica se clicou em algum ponto de navegação HTML
+    const elements = document.elementsFromPoint(event.clientX, event.clientY);
+    for (const element of elements) {
+      if (element.classList.contains('mp-nav-point')) {
+        const sceneIndex = parseInt(element.getAttribute('data-scene-index'));
+        if (!isNaN(sceneIndex)) {
+          console.log(`Clique em ponto de navegação HTML para cena ${sceneIndex}`);
+          navigateToScene(sceneIndex);
+          return true;
+        }
+      }
+    }
+    
+    return false;
+  }
 })();
