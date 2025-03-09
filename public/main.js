@@ -3265,4 +3265,44 @@
     
     return false;
   }
+
+  // Função para alternar entre modo unificado e cena única
+  function toggleUnifiedMode() {
+    // Inverter o estado atual
+    unifiedMode = !unifiedMode;
+    
+    // Exibir mensagem informativa
+    const mensagem = unifiedMode ? 
+      'Modo unificado: Todas as nuvens de pontos visíveis' : 
+      'Modo único: Apenas nuvem da cena atual visível';
+    showMessage(mensagem);
+    console.log(mensagem);
+    
+    // Atualizar a visibilidade das nuvens de pontos
+    updatePointCloudsVisibility();
+  }
+
+  // Função para atualizar a visibilidade das nuvens de pontos com base no modo
+  function updatePointCloudsVisibility() {
+    if (!pointClouds || pointClouds.length === 0) {
+      console.log('Nenhuma nuvem de pontos para atualizar');
+      return;
+    }
+    
+    console.log(`Atualizando visibilidade de ${pointClouds.length} nuvens de pontos (Modo: ${unifiedMode ? 'unificado' : 'único'})`);
+    
+    if (unifiedMode) {
+      // No modo unificado, todas as nuvens ficam visíveis
+      pointClouds.forEach(cloud => {
+        if (cloud) cloud.visible = true;
+      });
+      console.log('Todas as nuvens de pontos estão visíveis');
+    } else {
+      // No modo único, apenas a nuvem da cena atual fica visível
+      pointClouds.forEach((cloud, index) => {
+        if (cloud) cloud.visible = (index === currentSceneIndex);
+      });
+      console.log(`Apenas a nuvem da cena ${currentSceneIndex} está visível`);
+    }
+  }
 })();
