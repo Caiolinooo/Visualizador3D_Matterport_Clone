@@ -744,10 +744,24 @@
       return window.cachedFloorLevel;
     }
     
-    // Valor padrão caso não consigamos detectar
+    // Valor padrão para o floorLevel - usamos 0 como base segura
     let floorLevel = 0;
+    let detectionMethod = "valor padrão";
     
-    // Se temos nuvem de pontos, tentamos detectar o nível do piso
+    // Tenta detectar o nível do piso a partir da cena atual
+    if (currentSceneData && currentSceneData.center) {
+      // Se temos dados do centro da cena, podemos usar o componente Y como aproximação
+      // Normalmente, o centro da cena é posicionado perto do nível do piso
+      const sceneY = currentSceneData.center[1];
+      
+      // Verifica se o valor está em um intervalo razoável (-5 a 5 metros)
+      if (sceneY > -5 && sceneY < 5) {
+        floorLevel = sceneY;
+        detectionMethod = "centro da cena";
+      }
+    }
+    
+    // Se temos nuvem de pontos, tentamos uma detecção mais precisa
     if (pointClouds && pointClouds.length > 0) {
       let heightData = [];
       
@@ -758,47 +772,97 @@
           
           if (positions && positions.array) {
             // Coleta amostra de pontos (para não processar todos)
-            const sampleStep = Math.max(1, Math.floor(positions.array.length / 3000));
+            const sampleStep = Math.max(1, Math.floor(positions.array.length / 5000)); // Aumentado para melhor amostragem
+            
+            // Primeiro, encontra os valores mínimo e máximo para entender a escala da cena
+            let minY = Infinity;
+            let maxY = -Infinity;
             
             for (let i = 1; i < positions.array.length; i += 3 * sampleStep) {
               const y = positions.array[i];
-              // Filtrar valores extremos fora de um intervalo razoável (-5 a 5 metros)
-              if (y > -5 && y < 5) {
+              if (!isNaN(y) && isFinite(y)) {
+                minY = Math.min(minY, y);
+                maxY = Math.max(maxY, y);
+              }
+            }
+            
+            // Calcula a altura total da cena
+            const sceneHeight = maxY - minY;
+            
+            // Define uma janela para potenciais pontos do piso (parte inferior da cena)
+            // Normalmente o piso está nos 10-20% inferiores da cena
+            const floorWindow = sceneHeight * 0.2;
+            const floorMax = minY + floorWindow;
+            
+            // Coleta pontos dentro da janela do piso
+            for (let i = 1; i < positions.array.length; i += 3 * sampleStep) {
+              const y = positions.array[i];
+              if (!isNaN(y) && isFinite(y) && y >= minY && y <= floorMax) {
                 heightData.push(y);
+              }
+            }
+            
+            // Ordena e faz uma análise de cluster para encontrar o nível do piso
+            if (heightData.length > 20) { // Precisamos de uma amostra razoável
+              heightData.sort((a, b) => a - b);
+              
+              // Usamos um histograma para encontrar o cluster mais denso
+              const histogramBins = 20;
+              const histogramRange = floorWindow;
+              const binSize = histogramRange / histogramBins;
+              const histogram = new Array(histogramBins).fill(0);
+              
+              // Preenche o histograma
+              heightData.forEach(y => {
+                const binIndex = Math.min(
+                  histogramBins - 1, 
+                  Math.floor((y - minY) / binSize)
+                );
+                histogram[binIndex]++;
+              });
+              
+              // Encontra o bin mais populoso (maior cluster)
+              let maxBinCount = 0;
+              let maxBinIndex = 0;
+              
+              histogram.forEach((count, index) => {
+                if (count > maxBinCount) {
+                  maxBinCount = count;
+                  maxBinIndex = index;
+                }
+              });
+              
+              // Calcula o nível do piso como o centro do bin mais populoso
+              const detectedFloor = minY + (maxBinIndex + 0.5) * binSize;
+              
+              // Verifica se o valor é razoável
+              if (detectedFloor > -5 && detectedFloor < 5) {
+                floorLevel = detectedFloor;
+                detectionMethod = "análise de cluster";
+              } else {
+                // Se o valor detectado está fora do intervalo razoável,
+                // tentamos uma abordagem diferente
+                const percentileIndex = Math.floor(heightData.length * 0.1);
+                const percentileFloor = heightData[percentileIndex];
+                
+                if (percentileFloor > -5 && percentileFloor < 5) {
+                  floorLevel = percentileFloor;
+                  detectionMethod = "percentil 10%";
+                }
               }
             }
           }
         }
       });
-      
-      // Se encontramos pontos válidos
-      if (heightData.length > 0) {
-        // Ordenar os valores de altura
-        heightData.sort((a, b) => a - b);
-        
-        // Usar o 10º percentil como nível do piso (evita outliers inferiores)
-        const percentileIndex = Math.floor(heightData.length * 0.1);
-        floorLevel = heightData[percentileIndex];
-        
-        // Verifica se o valor está em um intervalo razoável
-        if (floorLevel < -2 || floorLevel > 2) {
-          console.warn(`Valor de piso detectado fora do intervalo comum: ${floorLevel.toFixed(2)}m. Ajustando para 0m.`);
-          floorLevel = 0; // Fallback para um valor seguro
-        } else {
-          console.log(`Nível do piso detectado: ${floorLevel.toFixed(2)}m`, {once: true});
-        }
-      }
     }
     
-    // Compatibilidade com versão anterior - verificar currentPointCloud apenas se ainda não temos valor
-    if (currentPointCloud && floorLevel === 0) {
-      // Verifica se a geometria existe
+    // Para compatibilidade com a versão anterior - verificamos currentPointCloud também
+    if (currentPointCloud && (!pointClouds || pointClouds.length === 0)) {
+      // [código existente para currentPointCloud]
       if (currentPointCloud.geometry) {
-        // Verifica se o atributo position existe
         const positions = currentPointCloud.geometry.getAttribute ? 
                           currentPointCloud.geometry.getAttribute('position') : null;
         
-        // Se há posições, usamos amostragem
         if (positions && positions.count) {
           const sampleSize = Math.min(1000, positions.count);
           const step = Math.floor(positions.count / sampleSize);
@@ -809,21 +873,29 @@
             yValues.push(positions.getY(i));
           }
           
-          // Ordena os valores de Y
           yValues.sort((a, b) => a - b);
           
-          // Pega o valor de 5% mais baixo como nível do piso
           const floorIndex = Math.floor(yValues.length * 0.05);
-          floorLevel = yValues[floorIndex] || 0;
-          console.log(`Nível do piso detectado pelo método alternativo: ${floorLevel.toFixed(2)}m`);
+          const alternativeFloor = yValues[floorIndex] || 0;
+          
+          // Só usamos este valor se o atual não for confiável e este estiver em um intervalo razoável
+          if (Math.abs(floorLevel) > 3 && Math.abs(alternativeFloor) < 3) {
+            floorLevel = alternativeFloor;
+            detectionMethod = "método alternativo";
+          }
+          
+          console.log(`Nível do piso detectado pelo método alternativo: ${alternativeFloor.toFixed(2)}m`);
         }
       }
     }
     
-    // Se não detectamos nada válido, usamos 0 como padrão
-    if (floorLevel === Infinity || isNaN(floorLevel) || Math.abs(floorLevel) > 5) {
-      floorLevel = 0;
-      console.log('Usando 0m como nível padrão do piso');
+    // Verifica se o valor final está em um intervalo aceitável
+    if (!isFinite(floorLevel) || isNaN(floorLevel) || Math.abs(floorLevel) > 3) {
+      const oldValue = floorLevel;
+      floorLevel = 0; // Usamos 0 como valor seguro padrão
+      console.log(`Valor de piso detectado fora do intervalo comum: ${oldValue.toFixed(2)}m. Ajustando para 0m.`);
+    } else {
+      console.log(`Nível do piso detectado (${detectionMethod}): ${floorLevel.toFixed(2)}m`);
     }
     
     // Armazena o valor em cache para evitar recálculos frequentes
@@ -2523,150 +2595,169 @@
 
   // Adiciona esta função para criar os círculos de navegação no estilo Matterport
   function createNavigationPoints() {
-    console.log('Criando pontos de navegação estilo Matterport');
+    console.log('Criando pontos de navegação');
     
     // Remover pontos de navegação antigos
-    const oldPoints = document.querySelectorAll('.mp-nav-point');
-    oldPoints.forEach(point => point.remove());
+    const oldNavPoints = document.querySelectorAll('.mp-nav-point');
+    oldNavPoints.forEach(point => point.remove());
     
-    // Limpa pontos 3D antigos
-    scene.children.forEach(child => {
-      if (child.userData && child.userData.type === 'navpoint') {
-        scene.remove(child);
+    // Remover pontos 3D antigos
+    scene.traverse(obj => {
+      if (obj.userData && obj.userData.isNavigationPoint) {
+        scene.remove(obj);
       }
     });
     
-    // Detecta o nível do piso
+    // Detectar nível do piso para posicionamento correto
     const floorLevel = detectFloorLevel();
-    console.log('Nível do piso para pontos de navegação:', floorLevel);
+    console.log(`Nível do piso detectado: ${floorLevel}m`);
     
-    // Container para os pontos de navegação HTML
-    let navPointsContainer = document.getElementById('nav-points-container');
-    if (!navPointsContainer) {
-      navPointsContainer = document.createElement('div');
-      navPointsContainer.id = 'nav-points-container';
-      navPointsContainer.style.position = 'absolute';
-      navPointsContainer.style.top = '0';
-      navPointsContainer.style.left = '0';
-      navPointsContainer.style.width = '100%';
-      navPointsContainer.style.height = '100%';
-      navPointsContainer.style.pointerEvents = 'none';
-      navPointsContainer.style.zIndex = '200';
-      document.body.appendChild(navPointsContainer);
+    // Criar container para pontos HTML se não existir
+    let container = document.getElementById('nav-points-container');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'nav-points-container';
+      container.style.position = 'absolute';
+      container.style.top = '0';
+      container.style.left = '0';
+      container.style.width = '100%';
+      container.style.height = '100%';
+      container.style.pointerEvents = 'none';
+      container.style.zIndex = '100';
+      document.body.appendChild(container);
     }
     
-    // Array para armazenar pontos candidatos para filtragem
-    const navPointCandidates = [];
+    // Verificar se temos dados de cena
+    if (!sceneData || !sceneData.scenes || sceneData.scenes.length === 0) {
+      console.warn('Sem dados de cena para criar pontos de navegação');
+      return;
+    }
     
-    // Cria pontos para cada cena disponível
-    scenes.forEach((sceneData, index) => {
-      if (index === currentSceneIndex) return; // Não cria ponto para a cena atual
+    // Obter a cena atual
+    const currentScene = sceneData.scenes[currentSceneIndex];
+    if (!currentScene || !currentScene.position) {
+      console.warn('Cena atual inválida ou sem posição');
+      return;
+    }
+    
+    const currentPosition = new THREE.Vector3(
+      currentScene.position.x,
+      currentScene.position.y,
+      currentScene.position.z
+    );
+    
+    // Armazenar candidatos a pontos de navegação com suas distâncias
+    const candidates = [];
+    
+    // Processar todas as cenas para criar pontos de navegação
+    sceneData.scenes.forEach((scene, index) => {
+      // Pular a cena atual
+      if (index === currentSceneIndex) return;
       
-      // Verifica se a cena tem coordenadas
-      if (!sceneData.center) {
-        console.warn(`Cena ${sceneData.name} não tem coordenadas de centro definidas`);
+      // Verificar se a cena tem posição
+      if (!scene.position) {
+        console.warn(`Cena ${index} não tem posição definida`);
         return;
       }
       
-      const center = sceneData.center;
-      
-      // Calcula a distância entre a cena atual e esta cena
-      let distance = 0;
-      if (currentSceneData && currentSceneData.center) {
-        const currentCenter = currentSceneData.center;
-        distance = Math.sqrt(
-          Math.pow(currentCenter[0] - center[0], 2) +
-          Math.pow(currentCenter[1] - center[1], 2) +
-          Math.pow(currentCenter[2] - center[2], 2)
-        );
-      }
-      
-      // Armazena o candidato com informações de distância para filtragem posterior
-      navPointCandidates.push({
-        center,
-        name: sceneData.name,
-        index,
-        distance
-      });
-    });
-    
-    // Filtra pontos para evitar aglomeração
-    // Ordena por distância (do mais próximo ao mais distante)
-    navPointCandidates.sort((a, b) => a.distance - b.distance);
-    
-    // Filtra pontos que estão muito próximos uns dos outros (mantém apenas o mais próximo)
-    const MIN_POINT_DISTANCE = 1.5; // Distância mínima entre pontos de navegação
-    const filteredPoints = [];
-    
-    navPointCandidates.forEach(candidate => {
-      // Verifica se este ponto está muito próximo de outro ponto já aceito
-      const isTooClose = filteredPoints.some(point => {
-        const pointDistance = Math.sqrt(
-          Math.pow(point.center[0] - candidate.center[0], 2) +
-          Math.pow(point.center[2] - candidate.center[2], 2)
-        );
-        return pointDistance < MIN_POINT_DISTANCE;
-      });
-      
-      // Se não estiver muito próximo, adiciona à lista filtrada
-      if (!isTooClose) {
-        filteredPoints.push(candidate);
-      } else {
-        console.log(`Ponto para ${candidate.name} filtrado por estar muito próximo de outro ponto`);
-      }
-    });
-    
-    // Limite de pontos visíveis para evitar poluição visual (Matterport mostra ~6-8 pontos por vez)
-    const MAX_VISIBLE_POINTS = 8;
-    const visiblePoints = filteredPoints.slice(0, MAX_VISIBLE_POINTS);
-    
-    // Distância máxima para mostrar pontos
-    const MAX_NAV_DISTANCE = 25; // Metros
-    
-    // Cria pontos HTML e 3D
-    visiblePoints.forEach(point => {
-      // Se a distância for muito grande, não criar ponto de navegação
-      if (point.distance > MAX_NAV_DISTANCE) {
-        console.log(`Ponto de navegação para ${point.name} ignorado: distância ${point.distance.toFixed(2)}m (muito longe)`);
-        return;
-      }
-      
-      console.log(`Criando ponto de navegação para ${point.name} a ${point.distance.toFixed(2)}m de distância`);
-      
-      // A altura do ponto depende da distância para criar sensação de perspectiva
-      // Pontos mais distantes ficam mais altos para simular o efeito de perspectiva do Matterport
-      const navPointHeight = floorLevel + 0.15 + (point.distance * 0.01);
-      
-      // Posição do ponto
-      const position = new THREE.Vector3(
-        point.center[0],
-        navPointHeight, // Posiciona o ponto um pouco acima do chão
-        point.center[2]
+      // Criar vetor para a posição da cena
+      const scenePosition = new THREE.Vector3(
+        scene.position.x,
+        scene.position.y,
+        scene.position.z
       );
       
-      // Cria o ponto de navegação HTML em vez de 3D
-      createHtmlNavPoint(position, point.name, point.index, point.distance);
+      // Calcular distância até a cena atual
+      const distance = currentPosition.distanceTo(scenePosition);
       
-      // Ainda mantém um ponto 3D invisível para raycasting
-      const circleGeometry = new THREE.CircleGeometry(0.2, 16);
-      const circleMaterial = new THREE.MeshBasicMaterial({
-        color: 0x00aaff,
-        transparent: true,
-        opacity: 0.0, // Invisível
-        side: THREE.DoubleSide
+      // Adicionar à lista de candidatos
+      candidates.push({
+        index,
+        position: scenePosition,
+        distance,
+        name: scene.name || `Cena ${index}`
       });
-      
-      const navCircle = new THREE.Mesh(circleGeometry, circleMaterial);
-      navCircle.rotation.x = -Math.PI / 2;
-      navCircle.position.copy(position);
-      navCircle.userData = {
-        type: 'navpoint',
-        targetScene: point.index,
-        name: point.name,
-        distance: point.distance
-      };
-      scene.add(navCircle);
     });
+    
+    // Ordenar candidatos por distância
+    candidates.sort((a, b) => a.distance - b.distance);
+    
+    // Filtrar pontos para evitar aglomeração
+    // Reduzir a distância mínima para 0.8 metros (era 1.5m)
+    // e garantir que pelo menos os 3 pontos mais próximos sejam mantidos
+    const minDistance = 0.8;
+    const filteredCandidates = [];
+    const guaranteedClosest = 3;
+    
+    // Sempre manter os N pontos mais próximos
+    for (let i = 0; i < Math.min(guaranteedClosest, candidates.length); i++) {
+      filteredCandidates.push(candidates[i]);
+    }
+    
+    // Filtrar os demais pontos
+    for (let i = guaranteedClosest; i < candidates.length; i++) {
+      const candidate = candidates[i];
+      
+      // Verificar se está muito próximo de algum ponto já filtrado
+      const isTooClose = filteredCandidates.some(filtered => 
+        filtered.position.distanceTo(candidate.position) < minDistance
+      );
+      
+      if (!isTooClose) {
+        filteredCandidates.push(candidate);
+      }
+    }
+    
+    // Limitar o número máximo de pontos visíveis (aumentado de 8 para 15)
+    // e a distância máxima de navegação (aumentada de 25 para 40 metros)
+    const maxPoints = 15;
+    const maxDistance = 40;
+    
+    // Criar pontos de navegação para os candidatos filtrados
+    let createdPoints = 0;
+    
+    filteredCandidates.forEach(candidate => {
+      // Limitar número de pontos e distância
+      if (createdPoints >= maxPoints || candidate.distance > maxDistance) return;
+      
+      // Ajustar altura para o nível do piso
+      const adjustedPosition = new THREE.Vector3(
+        candidate.position.x,
+        floorLevel + 1.2, // Posicionar um pouco acima do piso para melhor visibilidade
+        candidate.position.z
+      );
+      
+      // Criar ponto HTML
+      const htmlPoint = createHtmlNavPoint(
+        adjustedPosition,
+        candidate.index,
+        candidate.distance,
+        candidate.name
+      );
+      
+      if (htmlPoint) {
+        createdPoints++;
+        
+        // Também criar representação 3D do ponto
+        const geometry = new THREE.SphereGeometry(0.1, 16, 16);
+        const material = new THREE.MeshBasicMaterial({ 
+          color: 0x00aaff,
+          transparent: true,
+          opacity: 0.7
+        });
+        
+        const sphere = new THREE.Mesh(geometry, material);
+        sphere.position.copy(adjustedPosition);
+        sphere.userData = { 
+          isNavigationPoint: true,
+          targetSceneIndex: candidate.index
+        };
+        
+        scene.add(sphere);
+      }
+    });
+    
+    console.log(`Criados ${createdPoints} pontos de navegação`);
   }
 
   // Função para criar ponto de navegação HTML estilo Matterport
@@ -2689,10 +2780,13 @@
     const navPoint = document.createElement('div');
     navPoint.className = 'mp-nav-point';
     
+    // MELHORADO: Cores mais brilhantes e maior tamanho para melhor visibilidade
     // Adicionando a estrutura Matterport-like com círculo externo e interno
+    // e indicação direcional para mostrar para onde o ponto leva
     navPoint.innerHTML = `
       <div class="mp-nav-point-outer"></div>
       <div class="mp-nav-point-inner"></div>
+      <div class="mp-nav-point-direction"></div>
     `;
     
     navPoint.setAttribute('data-scene-index', sceneIndex);
@@ -2703,22 +2797,56 @@
     navPoint.style.left = `${x}px`;
     navPoint.style.top = `${y}px`;
     
+    // MELHORADO: Tamanho aumentado para melhor visibilidade
+    const baseSize = 40; // Era 30px
+    navPoint.style.width = `${baseSize}px`;
+    navPoint.style.height = `${baseSize}px`;
+    
+    // Escala menor para pontos mais distantes
+    const scale = Math.max(0.8, 1 - (distance * 0.01));
+    navPoint.style.transform = `translate(-50%, -50%) scale(${scale})`;
+    
+    // MELHORADO: Adicionando rótulo com nome da cena para melhorar a navegação
+    const label = document.createElement('div');
+    label.className = 'mp-nav-point-label';
+    label.textContent = `${name.replace(/^__Scan_/, '')} (${distance.toFixed(1)}m)`;
+    navPoint.appendChild(label);
+    
     // Adicionar tooltip com informações
     navPoint.title = `${name} (${distance.toFixed(1)}m)`;
     
     // Adicionar evento de clique
     navPoint.style.pointerEvents = 'auto';
     navPoint.addEventListener('click', () => {
+      console.log(`Clique no ponto de navegação para cena ${name} (índice ${sceneIndex})`);
       navigateToScene(sceneIndex);
     });
     
     // Efeito de hover para destacar o ponto
     navPoint.addEventListener('mouseenter', () => {
       navPoint.classList.add('mp-nav-point-hover');
+      
+      // MELHORADO: Destacar mais o ponto que está sob o mouse
+      const outerCircle = navPoint.querySelector('.mp-nav-point-outer');
+      const innerCircle = navPoint.querySelector('.mp-nav-point-inner');
+      const directionIndicator = navPoint.querySelector('.mp-nav-point-direction');
+      
+      if (outerCircle) outerCircle.style.transform = 'scale(1.2)';
+      if (innerCircle) innerCircle.style.transform = 'scale(1.3)';
+      if (directionIndicator) directionIndicator.style.opacity = '1';
     });
     
     navPoint.addEventListener('mouseleave', () => {
       navPoint.classList.remove('mp-nav-point-hover');
+      
+      // Restaurar tamanho original
+      const outerCircle = navPoint.querySelector('.mp-nav-point-outer');
+      const innerCircle = navPoint.querySelector('.mp-nav-point-inner');
+      const directionIndicator = navPoint.querySelector('.mp-nav-point-direction');
+      
+      if (outerCircle) outerCircle.style.transform = '';
+      if (innerCircle) innerCircle.style.transform = '';
+      if (directionIndicator) directionIndicator.style.opacity = '0.6';
     });
     
     // Adicionar ao container
@@ -2895,51 +3023,110 @@
         background: #0066cc;
       }
       
-      /* Pontos de navegação estilo Matterport */
+      /* MELHORADO: Pontos de navegação estilo Matterport */
       .mp-nav-point {
         position: absolute;
-        width: 30px;
-        height: 30px;
+        width: 40px;
+        height: 40px;
         transform: translate(-50%, -50%);
         display: flex;
         align-items: center;
         justify-content: center;
         cursor: pointer;
         pointer-events: auto;
-        transition: all 0.2s ease;
+        transition: all 0.3s ease;
         z-index: 200;
       }
       
       .mp-nav-point-outer {
         position: absolute;
-        width: 30px;
-        height: 30px;
+        width: 100%;
+        height: 100%;
         border-radius: 50%;
         background-color: rgba(255, 255, 255, 0.3);
-        border: 2px solid rgba(255, 255, 255, 0.8);
-        box-shadow: 0 0 8px rgba(0, 0, 0, 0.4);
-        transition: all 0.2s ease;
+        border: 2px solid rgba(255, 255, 255, 0.9);
+        box-shadow: 0 0 10px rgba(0, 0, 0, 0.5), 0 0 20px rgba(255, 255, 255, 0.3);
+        transition: all 0.3s ease;
+        animation: pulse 2s infinite;
       }
       
       .mp-nav-point-inner {
         position: absolute;
-        width: 12px;
-        height: 12px;
+        width: 16px;
+        height: 16px;
         border-radius: 50%;
         background-color: white;
-        transition: all 0.2s ease;
-        box-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
+        transition: all 0.3s ease;
+        box-shadow: 0 0 8px rgba(255, 255, 255, 0.8);
+      }
+      
+      .mp-nav-point-direction {
+        position: absolute;
+        width: 0;
+        height: 0;
+        border-left: 8px solid transparent;
+        border-right: 8px solid transparent;
+        border-bottom: 12px solid white;
+        transform: translateY(16px);
+        opacity: 0.6;
+        transition: all 0.3s ease;
+      }
+      
+      .mp-nav-point-label {
+        position: absolute;
+        bottom: -30px;
+        left: 50%;
+        transform: translateX(-50%);
+        background-color: rgba(0, 0, 0, 0.7);
+        color: white;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        white-space: nowrap;
+        opacity: 0;
+        transition: opacity 0.3s ease;
+        pointer-events: none;
+      }
+      
+      .mp-nav-point:hover .mp-nav-point-label {
+        opacity: 1;
       }
       
       .mp-nav-point-hover .mp-nav-point-outer {
         background-color: rgba(0, 153, 255, 0.6);
         border-color: white;
-        transform: scale(1.2);
       }
       
       .mp-nav-point-hover .mp-nav-point-inner {
         background-color: white;
         transform: scale(1.1);
+      }
+      
+      @keyframes pulse {
+        0% {
+          transform: scale(1);
+          opacity: 0.8;
+        }
+        50% {
+          transform: scale(1.05);
+          opacity: 1;
+        }
+        100% {
+          transform: scale(1);
+          opacity: 0.8;
+        }
+      }
+      
+      /* Animação de clique */
+      @keyframes clickEffect {
+        0% {
+          transform: translate(-50%, -50%) scale(0.5);
+          opacity: 1;
+        }
+        100% {
+          transform: translate(-50%, -50%) scale(2);
+          opacity: 0;
+        }
       }
       
       /* Informações e medições */
@@ -3010,6 +3197,7 @@
     `;
     
     document.head.appendChild(style);
+    console.log('Estilos Matterport aplicados');
     
     // Criando a barra superior
     const topBar = document.createElement('div');
@@ -3880,5 +4068,65 @@
       
       document.body.appendChild(fullscreenButton);
     }
+  }
+
+  // Função para atualizar a URL com informações da cena atual para compartilhamento
+  function updateURLWithSceneInfo(sceneIndex) {
+    // Apenas atualiza se o navegador suporta history API
+    if (!window.history || !window.history.replaceState) return;
+    
+    try {
+      // Cria uma nova URL baseada na atual
+      const url = new URL(window.location.href);
+      
+      // Adiciona o parâmetro de cena
+      if (sceneIndex !== undefined) {
+        url.searchParams.set('scene', sceneIndex);
+      } else {
+        url.searchParams.delete('scene');
+      }
+      
+      // Adiciona a posição da câmera atual
+      if (camera) {
+        const posStr = `${camera.position.x.toFixed(2)},${camera.position.y.toFixed(2)},${camera.position.z.toFixed(2)}`;
+        url.searchParams.set('pos', posStr);
+        
+        // Adiciona a direção da câmera
+        const dir = new THREE.Vector3();
+        camera.getWorldDirection(dir);
+        const dirStr = `${dir.x.toFixed(2)},${dir.y.toFixed(2)},${dir.z.toFixed(2)}`;
+        url.searchParams.set('dir', dirStr);
+      }
+      
+      // Atualiza a URL sem recarregar a página
+      window.history.replaceState({sceneIndex}, document.title, url.toString());
+      
+      console.log(`URL atualizada para compartilhamento: ${url.toString()}`);
+    } catch (error) {
+      console.warn('Erro ao atualizar URL:', error);
+    }
+  }
+
+  // Função para converter posição 3D para coordenadas de tela
+  function worldToScreen(position) {
+    // Clonar a posição para não modificar o original
+    const vector = new THREE.Vector3().copy(position);
+    
+    // Projetar a posição 3D para o espaço da tela
+    vector.project(camera);
+    
+    // Converter para coordenadas de pixels
+    const widthHalf = window.innerWidth / 2;
+    const heightHalf = window.innerHeight / 2;
+    
+    const x = (vector.x * widthHalf) + widthHalf;
+    const y = -(vector.y * heightHalf) + heightHalf;
+    
+    // Verificar se o ponto está dentro da tela
+    if (x < 0 || x > window.innerWidth || y < 0 || y > window.innerHeight || vector.z > 1) {
+      return null; // Ponto fora da tela ou atrás da câmera
+    }
+    
+    return { x, y };
   }
 })();
