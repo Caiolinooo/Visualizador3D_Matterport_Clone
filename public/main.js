@@ -2195,60 +2195,78 @@
   
   // Alterna o modo de medição
   function toggleMeasureMode() {
+    // Sai do modo tag se estiver ativo
+    if (isTagMode) {
+      isTagMode = false;
+    }
+    
+    // Alterna o modo de medição
     isMeasuring = !isMeasuring;
     
     if (isMeasuring) {
-      // Desativa outros modos
-      isTagMode = false;
-      
       // Limpa pontos de medição anteriores
       measurementPoints = [];
       
-      // Remove linha anterior
+      // Remove linha de medição anterior
       if (measurementLine) {
         scene.remove(measurementLine);
         measurementLine = null;
       }
       
-      // Remove pré-visualização
-      if (measurementPreview) {
-        scene.remove(measurementPreview);
-        measurementPreview = null;
+      // Adiciona linha de prévia
+      if (!measurementPreview) {
+        const previewGeometry = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(0, 0, 0),
+          new THREE.Vector3(0, 0, 0)
+        ]);
+        const previewMaterial = new THREE.LineBasicMaterial({
+          color: 0x00ffff,
+          opacity: 0.7,
+          transparent: true,
+          linewidth: 2
+        });
+        measurementPreview = new THREE.Line(previewGeometry, previewMaterial);
+        scene.add(measurementPreview);
       }
       
-      // Exibe mensagem de instrução
-      showMessage('Modo de medição ativado. Clique em dois pontos para medir a distância.');
-      measureInfoElement.textContent = 'Clique no primeiro ponto';
-      measureInfoElement.style.display = 'block';
+      showMessage('Modo medição ativado. Clique em dois pontos para medir a distância.');
     } else {
-      // Esconde a informação de medição
-      measureInfoElement.style.display = 'none';
-      
-      // Remove pré-visualização
+      // Remove linha de prévia
       if (measurementPreview) {
         scene.remove(measurementPreview);
         measurementPreview = null;
       }
       
-      showMessage('Modo de medição desativado');
+      showMessage('Modo medição desativado');
     }
     
+    // Atualiza UI
     updateUIState();
   }
   
   // Alterna o modo de adição de tags
   function toggleTagMode() {
+    // Sai do modo de medição se estiver ativo
+    if (isMeasuring) {
+      isMeasuring = false;
+      
+      // Remove linha de prévia
+      if (measurementPreview) {
+        scene.remove(measurementPreview);
+        measurementPreview = null;
+      }
+    }
+    
+    // Alterna o modo de tags
     isTagMode = !isTagMode;
     
     if (isTagMode) {
-      // Desativa outros modos
-      isMeasuring = false;
-      
-      showMessage('Modo de anotação ativado. Clique para adicionar uma anotação.');
+      showMessage('Modo de tags ativado. Clique para adicionar uma anotação.');
     } else {
-      showMessage('Modo de anotação desativado');
+      showMessage('Modo de tags desativado');
     }
     
+    // Atualiza UI
     updateUIState();
   }
   
@@ -2257,25 +2275,25 @@
     isFloorPlanVisible = !isFloorPlanVisible;
     
     if (isFloorPlanVisible) {
-      // Mostra a planta baixa
-      floorPlanElement.style.display = 'block';
-      
-      // Recarrega a planta baixa atual se existir
+      // Se temos dados da cena atual com planta baixa
       if (currentSceneData && currentSceneData.files && currentSceneData.files.floor_plan) {
-        loadFloorPlan(currentSceneData.files.floor_plan);
+        // Mostra a planta baixa expandida
+        toggleExpandedFloorPlan(currentSceneData.files.floor_plan);
+        showMessage('Planta baixa ativada');
       } else {
-        showMessage('Planta baixa não disponível para esta cena');
         isFloorPlanVisible = false;
-        floorPlanElement.style.display = 'none';
+        showMessage('Planta baixa não disponível para esta cena');
       }
-      
-      document.getElementById('btn-floorplan').classList.add('active');
     } else {
       // Esconde a planta baixa
-      floorPlanElement.style.display = 'none';
-      document.getElementById('btn-floorplan').classList.remove('active');
+      const floorPlanEl = document.getElementById('floor-plan');
+      if (floorPlanEl) {
+        floorPlanEl.style.display = 'none';
+      }
+      showMessage('Planta baixa desativada');
     }
     
+    // Atualiza UI
     updateUIState();
   }
   
@@ -2292,9 +2310,10 @@
         panoramaSphere.visible = false;
       }
       
-      if (currentPointCloud) {
-        currentPointCloud.visible = true;
-      }
+      // Certifica-se de que a nuvem de pontos está visível
+      pointClouds.forEach(cloud => {
+        if (cloud) cloud.visible = true;
+      });
       
       // Guarda posição atual para poder voltar
       savedCameraPosition = {
@@ -2302,84 +2321,105 @@
         target: controls.target.clone()
       };
       
-      // Posição de câmera para vista de cima (semelhante ao Matterport)
-      const centerScene = currentSceneData?.center || [0, 0, 0];
+      // Anima câmera para uma posição elevada com visão de cima
+      const sceneCenter = currentSceneData ? currentSceneData.center : [0, 0, 0];
       
-      // Anima para a posição aérea - usa o nível do piso como referência
-      const targetPos = new THREE.Vector3(centerScene[0], floorLevel + 15, centerScene[2]);
-      const targetTarget = new THREE.Vector3(centerScene[0], floorLevel, centerScene[2]);
+      // Posição para a vista de dollhouse (acima e inclinada)
+      const dollhousePos = new THREE.Vector3(
+        sceneCenter[0] - 5,
+        Math.max(15, floorLevel + 15),
+        sceneCenter[2] - 5
+      );
       
-      animateCameraMovement(camera.position, targetPos, controls.target, targetTarget, 1000);
+      // Alvo da câmera (centro da cena)
+      const dollhouseTarget = new THREE.Vector3(
+        sceneCenter[0],
+        floorLevel,
+        sceneCenter[2]
+      );
       
-      // Ajusta controles para mais liberdade no modo dollhouse
-      controls.minPolarAngle = 0; // Permite olhar diretamente para baixo
-      controls.maxDistance = 50;  // Permite afastar mais
+      // Anima a transição para a vista dollhouse
+      animateCameraMovement(
+        camera.position.clone(),
+        dollhousePos,
+        controls.target.clone(),
+        dollhouseTarget,
+        1500
+      );
       
-      showMessage('Modo Dollhouse Ativado');
+      // Ajusta controles para permitir órbita completa
+      controls.minPolarAngle = 0;
+      controls.maxPolarAngle = Math.PI;
+      controls.minDistance = 2;
+      controls.maxDistance = 50;
+      
+      showMessage('Modo Dollhouse ativado');
     } else {
-      // Volta ao modo normal - foca nas panorâmicas
+      // Modo normal - restaura a visualização anterior
       if (panoramaSphere) {
         panoramaSphere.visible = true;
       }
       
-      if (currentPointCloud) {
-        currentPointCloud.visible = false;
-      }
-      
-      // Restaura posição anterior usando a função animateCameraMovement
       if (savedCameraPosition) {
+        // Anima a volta para a posição anterior
         animateCameraMovement(
-          camera.position,
+          camera.position.clone(),
           savedCameraPosition.position,
-          controls.target,
+          controls.target.clone(),
           savedCameraPosition.target,
-          1000
+          1500
         );
+      } else {
+        // Se não temos posição salva, volta para a posição padrão
+        resetView();
       }
       
-      // Restaura limitações de controles
-      controls.minPolarAngle = Math.PI * 0.1;
-      controls.maxDistance = 10;
+      // Ajusta controles para modo panorâmico
+      controls.minPolarAngle = Math.PI * 0.05;
+      controls.maxPolarAngle = Math.PI * 0.95;
+      controls.minDistance = 0.1;
+      controls.maxDistance = 1.0;
       
-      showMessage('Modo Normal Ativado');
+      showMessage('Modo normal restaurado');
     }
     
+    // Atualiza UI
     updateUIState();
   }
   
   // Inicia/para o tour automático
   function toggleAutoTour() {
-    autoTourActive = !autoTourActive;
-    
     if (autoTourActive) {
-      startAutoTour();
-      showMessage('Tour automático iniciado');
-    } else {
+      // Para o tour
       stopAutoTour();
-      showMessage('Tour automático parado');
+    } else {
+      // Inicia o tour
+      startAutoTour();
     }
     
+    // Atualiza UI
     updateUIState();
   }
   
   // Inicia o tour automático
   function startAutoTour() {
-    let currentTourSceneIndex = 0;
+    autoTourActive = true;
+    showMessage('Tour automático iniciado');
     
-    // Navega para a próxima cena a cada intervalo
-    autoTourInterval = setInterval(() => {
-      currentTourSceneIndex = (currentTourSceneIndex + 1) % scenes.length;
-      navigateToScene(currentTourSceneIndex);
-    }, 10000); // 10 segundos por cena
+    // Inicia o tour guiado
+    startGuidedTour();
   }
   
   // Para o tour automático
   function stopAutoTour() {
+    autoTourActive = false;
+    
     if (autoTourInterval) {
       clearInterval(autoTourInterval);
       autoTourInterval = null;
     }
-    autoTourActive = false;
+    
+    showMessage('Tour automático parado');
   }
   
   /*
@@ -2388,44 +2428,39 @@
   
   // Atualiza o estado visual dos botões da UI
   function updateUIState() {
-    // Atualiza botão de medição
-    const measureBtn = document.getElementById('btn-measure');
+    // Atualiza classes ativas nos botões
+    const btnDollhouse = document.getElementById('btn-dollhouse');
+    if (btnDollhouse) {
+      btnDollhouse.classList.toggle('active', isDollhouseMode);
+    }
+    
+    const btnFloorplan = document.getElementById('btn-floorplan');
+    if (btnFloorplan) {
+      btnFloorplan.classList.toggle('active', isFloorPlanVisible);
+    }
+    
+    const btnMeasure = document.getElementById('btn-measure');
+    if (btnMeasure) {
+      btnMeasure.classList.toggle('active', isMeasuring);
+    }
+    
+    const btnTags = document.getElementById('btn-tags');
+    if (btnTags) {
+      btnTags.classList.toggle('active', isTagMode);
+    }
+    
+    const btnTour = document.getElementById('btn-tour');
+    if (btnTour) {
+      btnTour.classList.toggle('active', autoTourActive);
+    }
+    
+    // Atualiza cursor baseado no modo
     if (isMeasuring) {
-      measureBtn.classList.add('active');
+      document.body.style.cursor = 'crosshair';
+    } else if (isTagMode) {
+      document.body.style.cursor = 'cell';
     } else {
-      measureBtn.classList.remove('active');
-    }
-    
-    // Atualiza botão de tags
-    const tagsBtn = document.getElementById('btn-tags');
-    if (isTagMode) {
-      tagsBtn.classList.add('active');
-    } else {
-      tagsBtn.classList.remove('active');
-    }
-    
-    // Atualiza botão de doll house
-    const dollhouseBtn = document.getElementById('btn-dollhouse');
-    if (isDollhouseMode) {
-      dollhouseBtn.classList.add('active');
-    } else {
-      dollhouseBtn.classList.remove('active');
-    }
-    
-    // Atualiza botão de planta baixa
-    const floorplanBtn = document.getElementById('btn-floorplan');
-    if (isFloorPlanVisible) {
-      floorplanBtn.classList.add('active');
-    } else {
-      floorplanBtn.classList.remove('active');
-    }
-    
-    // Atualiza botão de tour
-    const tourBtn = document.getElementById('btn-tour');
-    if (autoTourActive) {
-      tourBtn.classList.add('active');
-    } else {
-      tourBtn.classList.remove('active');
+      document.body.style.cursor = 'default';
     }
   }
   
@@ -3303,6 +3338,547 @@
         if (cloud) cloud.visible = (index === currentSceneIndex);
       });
       console.log(`Apenas a nuvem da cena ${currentSceneIndex} está visível`);
+    }
+  }
+
+  // Função para configurar o mini-mapa estilo Matterport
+  function setupMiniMap() {
+    console.log('Configurando mini-mapa estilo Matterport');
+    
+    // Cria container para o mini-mapa
+    miniMapContainer = document.createElement('div');
+    miniMapContainer.id = 'mini-map';
+    miniMapContainer.style.position = 'absolute';
+    miniMapContainer.style.bottom = '20px';
+    miniMapContainer.style.right = '20px';
+    miniMapContainer.style.width = '200px';
+    miniMapContainer.style.height = '200px';
+    miniMapContainer.style.border = '2px solid #fff';
+    miniMapContainer.style.borderRadius = '5px';
+    miniMapContainer.style.overflow = 'hidden';
+    miniMapContainer.style.boxShadow = '0 0 10px rgba(0,0,0,0.5)';
+    miniMapContainer.style.zIndex = '100';
+    document.body.appendChild(miniMapContainer);
+    
+    // Cria cena para o mini-mapa
+    miniMap = new THREE.Scene();
+    miniMap.background = new THREE.Color(0x333333);
+    
+    // Cria câmera para visão de topo
+    miniMapCamera = new THREE.OrthographicCamera(
+      -10, 10, 10, -10, 0.1, 1000
+    );
+    miniMapCamera.position.set(0, 20, 0);
+    miniMapCamera.lookAt(0, 0, 0);
+    miniMapCamera.up.set(0, 0, -1); // Ajusta para que o norte fique para cima
+    
+    // Adiciona iluminação básica
+    const light = new THREE.AmbientLight(0xffffff, 1);
+    miniMap.add(light);
+    
+    // Cria renderer separado para o mini-mapa
+    const miniMapRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    miniMapRenderer.setSize(200, 200);
+    miniMapRenderer.setPixelRatio(window.devicePixelRatio);
+    miniMapContainer.appendChild(miniMapRenderer.domElement);
+    
+    // Cria indicador da posição do usuário
+    const markerGeometry = new THREE.CircleGeometry(0.3, 32);
+    const markerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+    userPositionMarker = new THREE.Mesh(markerGeometry, markerMaterial);
+    userPositionMarker.rotation.x = -Math.PI / 2; // Roda para ficar no plano horizontal
+    miniMap.add(userPositionMarker);
+    
+    // Cria grid de referência
+    const gridHelper = new THREE.GridHelper(20, 20, 0x555555, 0x333333);
+    gridHelper.rotateX(Math.PI / 2);
+    miniMap.add(gridHelper);
+    
+    // Adiciona botão para alternar a visibilidade do mini-mapa
+    const toggleMiniMapButton = document.createElement('button');
+    toggleMiniMapButton.textContent = 'Mapa';
+    toggleMiniMapButton.className = 'mp-btn';
+    toggleMiniMapButton.title = 'Alternar Mini-Mapa';
+    toggleMiniMapButton.innerHTML = '🗺️';
+    toggleMiniMapButton.style.position = 'absolute';
+    toggleMiniMapButton.style.top = '5px';
+    toggleMiniMapButton.style.right = '5px';
+    toggleMiniMapButton.style.zIndex = '101';
+    toggleMiniMapButton.style.width = '30px';
+    toggleMiniMapButton.style.height = '30px';
+    toggleMiniMapButton.style.padding = '0';
+    toggleMiniMapButton.addEventListener('click', toggleMiniMap);
+    miniMapContainer.appendChild(toggleMiniMapButton);
+    
+    // Função para renderizar o mini-mapa
+    function renderMiniMap() {
+      // Atualiza posição do marcador do usuário
+      if (userPositionMarker && camera) {
+        userPositionMarker.position.set(camera.position.x, 0, camera.position.z);
+        
+        // Rotação do marcador para indicar para onde o usuário está olhando
+        const direction = new THREE.Vector3();
+        camera.getWorldDirection(direction);
+        const angle = Math.atan2(direction.x, direction.z);
+        userPositionMarker.rotation.z = angle;
+      }
+      
+      // Centraliza câmera do mini-mapa na posição do usuário
+      if (miniMapCamera && camera) {
+        miniMapCamera.position.set(camera.position.x, 20, camera.position.z);
+        miniMapCamera.lookAt(camera.position.x, 0, camera.position.z);
+      }
+      
+      // Renderiza mini-mapa
+      miniMapRenderer.render(miniMap, miniMapCamera);
+      
+      // Continua o loop de renderização
+      requestAnimationFrame(renderMiniMap);
+    }
+    
+    // Inicia o loop de renderização do mini-mapa
+    renderMiniMap();
+    
+    console.log('Mini-mapa configurado');
+    return miniMapRenderer;
+  }
+
+  // Função para alternar a visibilidade do mini-mapa
+  function toggleMiniMap() {
+    isMiniMapVisible = !isMiniMapVisible;
+    if (miniMapContainer) {
+      miniMapContainer.style.display = isMiniMapVisible ? 'block' : 'none';
+    }
+  }
+
+  // Função para atualizar o mini-mapa quando uma nova cena é carregada
+  function updateMiniMapForScene(sceneData) {
+    if (!miniMap) return;
+    
+    // Limpa pontos de navegação anteriores
+    miniMap.children.forEach(child => {
+      if (child.userData && child.userData.type === 'navpoint-minimap') {
+        miniMap.remove(child);
+      }
+    });
+    
+    // Adiciona pontos para todas as cenas no mini-mapa
+    if (scenes && scenes.length > 0) {
+      scenes.forEach((scene, index) => {
+        if (scene.center && Array.isArray(scene.center) && scene.center.length >= 3) {
+          // Cria um ponto no mini-mapa para cada cena
+          const pointGeometry = new THREE.CircleGeometry(0.2, 16);
+          const pointMaterial = new THREE.MeshBasicMaterial({ 
+            color: index === currentSceneIndex ? 0x00ff00 : 0x3388ff
+          });
+          const point = new THREE.Mesh(pointGeometry, pointMaterial);
+          point.position.set(scene.center[0], 0, scene.center[2]);
+          point.rotation.x = -Math.PI / 2; // Gira para ficar no plano horizontal
+          point.userData = {
+            type: 'navpoint-minimap',
+            sceneIndex: index
+          };
+          miniMap.add(point);
+          
+          // Se houver mais de uma cena, conecte os pontos com linhas
+          if (index > 0 && scenes[index-1].center) {
+            const prevCenter = scenes[index-1].center;
+            const lineGeometry = new THREE.BufferGeometry().setFromPoints([
+              new THREE.Vector3(prevCenter[0], 0, prevCenter[2]),
+              new THREE.Vector3(scene.center[0], 0, scene.center[2])
+            ]);
+            const lineMaterial = new THREE.LineBasicMaterial({ color: 0x555555 });
+            const line = new THREE.Line(lineGeometry, lineMaterial);
+            line.userData = { type: 'navpoint-minimap' };
+            miniMap.add(line);
+          }
+        }
+      });
+    }
+    
+    // Se tiver planta baixa, adiciona ao mini-mapa
+    if (sceneData && sceneData.files && sceneData.files.floor_plan) {
+      // Carrega a textura da planta baixa
+      const textureLoader = new THREE.TextureLoader();
+      textureLoader.load(sceneData.files.floor_plan, (texture) => {
+        const material = new THREE.MeshBasicMaterial({ 
+          map: texture,
+          transparent: true,
+          opacity: 0.7,
+          side: THREE.DoubleSide
+        });
+        
+        // Tamanho estimado para a planta baixa
+        const width = 15;
+        const height = 15;
+        const geometry = new THREE.PlaneGeometry(width, height);
+        const floorPlan = new THREE.Mesh(geometry, material);
+        
+        // Posiciona no plano horizontal
+        floorPlan.rotation.x = -Math.PI / 2;
+        
+        // Remove planta baixa anterior se existir
+        miniMap.children.forEach(child => {
+          if (child.userData && child.userData.type === 'floorplan-minimap') {
+            miniMap.remove(child);
+          }
+        });
+        
+        floorPlan.userData = { type: 'floorplan-minimap' };
+        miniMap.add(floorPlan);
+      });
+    }
+  }
+
+  // Adicionar funcionalidade de captura de tela e compartilhamento
+  function setupShareFeatures() {
+    // Cria o container para os botões de compartilhamento
+    const shareContainer = document.createElement('div');
+    shareContainer.style.position = 'absolute';
+    shareContainer.style.top = '20px';
+    shareContainer.style.right = '20px';
+    shareContainer.style.display = 'flex';
+    shareContainer.style.flexDirection = 'column';
+    shareContainer.style.gap = '10px';
+    shareContainer.style.zIndex = '100';
+    document.body.appendChild(shareContainer);
+    
+    // Botão de captura de tela
+    const screenshotButton = document.createElement('button');
+    screenshotButton.className = 'mp-btn';
+    screenshotButton.innerHTML = '📷';
+    screenshotButton.title = 'Capturar Tela';
+    screenshotButton.addEventListener('click', takeScreenshot);
+    shareContainer.appendChild(screenshotButton);
+    
+    // Botão de compartilhamento
+    const shareButton = document.createElement('button');
+    shareButton.className = 'mp-btn';
+    shareButton.innerHTML = '🔗';
+    shareButton.title = 'Compartilhar';
+    shareButton.addEventListener('click', shareScene);
+    shareContainer.appendChild(shareButton);
+    
+    // Botão de tour virtual
+    const tourButton = document.createElement('button');
+    tourButton.className = 'mp-btn';
+    tourButton.innerHTML = '🎬';
+    tourButton.title = 'Iniciar Tour Virtual';
+    tourButton.addEventListener('click', startGuidedTour);
+    shareContainer.appendChild(tourButton);
+    
+    console.log('Recursos de compartilhamento configurados');
+  }
+
+  // Função para capturar uma imagem da cena atual
+  function takeScreenshot() {
+    try {
+      // Oculta elementos da UI temporariamente
+      const elementsToHide = [
+        document.getElementById('info'),
+        document.getElementById('measure-info'),
+        miniMapContainer,
+        document.querySelector('.mp-controls'),
+        document.querySelector('.mp-top-bar'),
+        document.querySelector('.mp-side-controls')
+      ];
+      
+      elementsToHide.forEach(el => {
+        if (el) el.style.visibility = 'hidden';
+      });
+      
+      // Renderiza a cena
+      renderer.render(scene, camera);
+      
+      // Captura a imagem
+      const dataURL = renderer.domElement.toDataURL('image/png');
+      
+      // Restaura visibilidade dos elementos
+      elementsToHide.forEach(el => {
+        if (el) el.style.visibility = 'visible';
+      });
+      
+      // Cria um link para download da imagem
+      const link = document.createElement('a');
+      link.href = dataURL;
+      link.download = `matterport-clone-${currentSceneData?.name || 'scene'}.png`;
+      link.click();
+      
+      showMessage('Screenshot capturado!');
+    } catch (error) {
+      console.error('Erro ao capturar screenshot:', error);
+      showMessage('Erro ao capturar screenshot');
+    }
+  }
+
+  // Função para compartilhar a cena atual
+  function shareScene() {
+    // Gera URL com parâmetros para a cena atual
+    const url = new URL(window.location.href);
+    
+    // Limpa parâmetros existentes
+    url.search = '';
+    
+    // Adiciona parâmetros para a cena atual
+    if (currentSceneIndex !== undefined) {
+      url.searchParams.set('scene', currentSceneIndex);
+    }
+    
+    // Adiciona posição e orientação da câmera
+    if (camera) {
+      url.searchParams.set('pos', `${camera.position.x.toFixed(2)},${camera.position.y.toFixed(2)},${camera.position.z.toFixed(2)}`);
+      
+      // Adiciona direção da câmera
+      const direction = new THREE.Vector3();
+      camera.getWorldDirection(direction);
+      url.searchParams.set('dir', `${direction.x.toFixed(2)},${direction.y.toFixed(2)},${direction.z.toFixed(2)}`);
+    }
+    
+    // Adiciona modo atual
+    url.searchParams.set('mode', isDollhouseMode ? 'dollhouse' : 'panorama');
+    
+    // Cria caixa de diálogo para compartilhamento
+    const shareDialog = document.createElement('div');
+    shareDialog.style.position = 'fixed';
+    shareDialog.style.top = '50%';
+    shareDialog.style.left = '50%';
+    shareDialog.style.transform = 'translate(-50%, -50%)';
+    shareDialog.style.background = 'rgba(0, 0, 0, 0.9)';
+    shareDialog.style.color = 'white';
+    shareDialog.style.padding = '20px';
+    shareDialog.style.borderRadius = '10px';
+    shareDialog.style.zIndex = '1000';
+    shareDialog.style.maxWidth = '500px';
+    shareDialog.style.width = '80%';
+    shareDialog.style.textAlign = 'center';
+    
+    shareDialog.innerHTML = `
+      <h3>Compartilhar esta Cena</h3>
+      <p>Copie o link abaixo para compartilhar esta visualização exata:</p>
+      <input type="text" value="${url.toString()}" style="width:100%; padding:10px; margin:10px 0; border-radius:5px;" readonly onclick="this.select()">
+      <div style="display:flex; justify-content:center; gap:10px; margin-top:20px;">
+        <button id="copy-link" style="padding:8px 15px; background:#4CAF50; color:white; border:none; border-radius:5px; cursor:pointer;">Copiar Link</button>
+        <button id="close-dialog" style="padding:8px 15px; background:#f44336; color:white; border:none; border-radius:5px; cursor:pointer;">Fechar</button>
+      </div>
+    `;
+    
+    document.body.appendChild(shareDialog);
+    
+    // Adiciona eventos
+    document.getElementById('copy-link').addEventListener('click', () => {
+      const input = shareDialog.querySelector('input');
+      input.select();
+      document.execCommand('copy');
+      showMessage('Link copiado para área de transferência!');
+    });
+    
+    document.getElementById('close-dialog').addEventListener('click', () => {
+      document.body.removeChild(shareDialog);
+    });
+  }
+
+  // Função para iniciar um tour guiado
+  function startGuidedTour() {
+    if (scenes.length < 2) {
+      showMessage('Não há cenas suficientes para um tour');
+      return;
+    }
+    
+    showMessage('Iniciando tour virtual...');
+    
+    // Array para controlar quais cenas já foram visitadas
+    const visitedScenes = new Array(scenes.length).fill(false);
+    visitedScenes[currentSceneIndex] = true;
+    
+    // Função recursiva para visitar próxima cena
+    function visitNextScene() {
+      // Verifica se todas as cenas foram visitadas
+      if (visitedScenes.every(visited => visited)) {
+        showMessage('Tour virtual completo!');
+        return;
+      }
+      
+      // Encontra cenas adjacentes (próximas) da cena atual
+      const currentCenter = scenes[currentSceneIndex].center;
+      let nearestSceneIndex = -1;
+      let shortestDistance = Infinity;
+      
+      scenes.forEach((scene, index) => {
+        if (!visitedScenes[index] && scene.center) {
+          const distance = Math.sqrt(
+            Math.pow(currentCenter[0] - scene.center[0], 2) +
+            Math.pow(currentCenter[1] - scene.center[1], 2) +
+            Math.pow(currentCenter[2] - scene.center[2], 2)
+          );
+          
+          if (distance < shortestDistance) {
+            shortestDistance = distance;
+            nearestSceneIndex = index;
+          }
+        }
+      });
+      
+      // Se encontrou uma próxima cena
+      if (nearestSceneIndex !== -1) {
+        visitedScenes[nearestSceneIndex] = true;
+        
+        // Navega para a próxima cena
+        setTimeout(() => {
+          navigateToScene(nearestSceneIndex);
+          
+          // Após a transição, agenda a próxima navegação
+          setTimeout(visitNextScene, 5000); // 5 segundos em cada cena
+        }, 1000);
+      } else {
+        showMessage('Tour virtual completo!');
+      }
+    }
+    
+    // Inicia o tour
+    setTimeout(visitNextScene, 2000);
+  }
+
+  // Adicionar função de processamento de parâmetros de URL
+  function processUrlParameters() {
+    console.log('Processando parâmetros da URL...');
+    
+    const urlParams = new URLSearchParams(window.location.search);
+    
+    // Se temos parâmetro de cena, carregamos a cena especificada
+    if (urlParams.has('scene')) {
+      const sceneIndex = parseInt(urlParams.get('scene'));
+      if (!isNaN(sceneIndex) && sceneIndex >= 0 && scenes && sceneIndex < scenes.length) {
+        console.log(`Carregando cena ${sceneIndex} da URL`);
+        setTimeout(() => {
+          navigateToScene(sceneIndex);
+        }, 1000); // Pequeno delay para garantir que a cena inicial foi carregada
+      }
+    }
+    
+    // Se temos parâmetros de posição da câmera
+    if (urlParams.has('pos')) {
+      try {
+        const posValues = urlParams.get('pos').split(',').map(v => parseFloat(v));
+        if (posValues.length === 3 && posValues.every(v => !isNaN(v))) {
+          setTimeout(() => {
+            camera.position.set(posValues[0], posValues[1], posValues[2]);
+            console.log(`Câmera posicionada em [${posValues.join(', ')}] da URL`);
+          }, 1500);
+        }
+      } catch (e) {
+        console.warn('Erro ao processar parâmetro de posição da URL:', e);
+      }
+    }
+    
+    // Se temos parâmetros de direção da câmera
+    if (urlParams.has('dir')) {
+      try {
+        const dirValues = urlParams.get('dir').split(',').map(v => parseFloat(v));
+        if (dirValues.length === 3 && dirValues.every(v => !isNaN(v))) {
+          setTimeout(() => {
+            const lookAt = new THREE.Vector3(
+              camera.position.x + dirValues[0],
+              camera.position.y + dirValues[1],
+              camera.position.z + dirValues[2]
+            );
+            controls.target.copy(lookAt);
+            controls.update();
+            console.log(`Câmera direcionada para [${dirValues.join(', ')}] da URL`);
+          }, 1500);
+        }
+      } catch (e) {
+        console.warn('Erro ao processar parâmetro de direção da URL:', e);
+      }
+    }
+    
+    // Se temos parâmetro de modo (dollhouse ou panorama)
+    if (urlParams.has('mode')) {
+      setTimeout(() => {
+        const mode = urlParams.get('mode').toLowerCase();
+        if (mode === 'dollhouse' && !isDollhouseMode) {
+          toggleDollhouseMode();
+          console.log('Modo dollhouse ativado da URL');
+        } else if (mode === 'panorama' && isDollhouseMode) {
+          toggleDollhouseMode();
+          console.log('Modo panorama ativado da URL');
+        }
+      }, 2000);
+    }
+    
+    // Se temos parâmetro para iniciar tour automático
+    if (urlParams.has('tour') && urlParams.get('tour') === 'true') {
+      setTimeout(() => {
+        startGuidedTour();
+        console.log('Tour automático iniciado da URL');
+      }, 3000);
+    }
+    
+    console.log('Processamento de parâmetros da URL concluído');
+  }
+
+  // Adicionar funcionalidade de incorporação (embed)
+  function setupEmbedFeatures() {
+    // Verifica se estamos em modo incorporado
+    const isEmbedded = window.location.search.includes('embed=true');
+    
+    if (isEmbedded) {
+      console.log('Executando em modo incorporado');
+      
+      // Ajusta estilos para modo incorporado
+      document.body.classList.add('embedded');
+      
+      // Adiciona estilos CSS para modo incorporado
+      const embedStyles = document.createElement('style');
+      embedStyles.textContent = `
+        body.embedded .mp-top-bar {
+          height: 40px;
+        }
+        body.embedded .mp-controls {
+          transform: scale(0.8);
+          bottom: 10px;
+        }
+        body.embedded #mini-map {
+          transform: scale(0.8);
+          bottom: 10px;
+          right: 10px;
+        }
+        body.embedded #info {
+          font-size: 12px;
+          padding: 5px;
+        }
+      `;
+      document.head.appendChild(embedStyles);
+      
+      // Adiciona logo da marca
+      const logoContainer = document.createElement('div');
+      logoContainer.style.position = 'absolute';
+      logoContainer.style.bottom = '10px';
+      logoContainer.style.left = '10px';
+      logoContainer.style.zIndex = '100';
+      logoContainer.style.background = 'rgba(0,0,0,0.5)';
+      logoContainer.style.padding = '5px';
+      logoContainer.style.borderRadius = '5px';
+      
+      logoContainer.innerHTML = '<span style="color:white; font-weight:bold;">Matterport Clone</span>';
+      document.body.appendChild(logoContainer);
+      
+      // Adiciona botão para abrir em modo fullscreen
+      const fullscreenButton = document.createElement('button');
+      fullscreenButton.className = 'mp-btn';
+      fullscreenButton.innerHTML = '🔍';
+      fullscreenButton.title = 'Abrir em tela cheia';
+      fullscreenButton.style.position = 'absolute';
+      fullscreenButton.style.top = '10px';
+      fullscreenButton.style.left = '10px';
+      fullscreenButton.style.zIndex = '100';
+      
+      fullscreenButton.addEventListener('click', () => {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('embed');
+        window.open(url.toString(), '_blank');
+      });
+      
+      document.body.appendChild(fullscreenButton);
     }
   }
 })();
