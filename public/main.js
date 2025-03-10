@@ -342,6 +342,14 @@
         processIntersections(intersects);
       }
       
+      // Atualiza as posições dos pontos de navegação
+      updateNavPointsPositions();
+      
+      // Atualiza as etiquetas de medição se houver
+      if (window.measurements && window.measurements.length > 0) {
+        updateAllMeasurementLabels();
+      }
+      
       // Renderiza a cena
       renderer.render(scene, camera);
     } catch (error) {
@@ -1466,8 +1474,37 @@
     
     const img = new Image();
     img.onload = function() {
+      // Criar um canvas em vez de apenas anexar a imagem
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      canvas.className = 'floor-plan-canvas';
+      
+      // Desenhar a imagem no canvas
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#f0f0f0';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, img.width, img.height);
+      
+      // Adicionar efeitos para tornar mais realista
+      ctx.globalCompositeOperation = 'multiply';
+      ctx.fillStyle = 'rgba(230, 230, 250, 0.2)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.globalCompositeOperation = 'source-over';
+      
+      // Adicionar bordas para paredes
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(10, 10, canvas.width - 20, canvas.height - 20);
+      
+      // Limpar o container da planta baixa
       floorPlanElement.innerHTML = '';
-      floorPlanElement.appendChild(img);
+      floorPlanElement.appendChild(canvas);
+      
+      // Adicionar pontos de navegação à planta baixa se houver dados de cena
+      if (scenes && scenes.length > 1) {
+        addNavigationPointsToFloorPlan(canvas, floorPlanUrl);
+      }
       
       // Cria um botão de ampliação da planta
       const expandBtn = document.createElement('button');
@@ -1493,7 +1530,101 @@
     img.src = floorPlanUrl;
   }
   
-  // Nova função para mostrar a planta baixa ampliada com navegação
+  // Nova função para adicionar pontos de navegação na planta baixa
+  function addNavigationPointsToFloorPlan(canvas, floorPlanUrl) {
+    if (!scenes || !currentSceneData || !currentSceneData.position) return;
+    
+    const ctx = canvas.getContext('2d');
+    const width = canvas.width;
+    const height = canvas.height;
+    
+    // Buscar informações sobre a escala da planta baixa
+    // Podemos usar metadados ou estimar com base nas dimensões da cena
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    
+    scenes.forEach(scene => {
+      if (scene.position) {
+        minX = Math.min(minX, scene.position.x);
+        maxX = Math.max(maxX, scene.position.x);
+        minZ = Math.min(minZ, scene.position.z);
+        maxZ = Math.max(maxZ, scene.position.z);
+      }
+    });
+    
+    // Adicionar margem
+    const margin = 20;
+    const scaleX = (width - margin*2) / (maxX - minX || 1);
+    const scaleZ = (height - margin*2) / (maxZ - minZ || 1);
+    
+    // Desenhar pontos de navegação na planta
+    scenes.forEach((scene, index) => {
+      if (!scene.position) return;
+      
+      // Converter coordenadas 3D para coordenadas 2D na planta
+      const x = margin + (scene.position.x - minX) * scaleX;
+      const y = margin + (scene.position.z - minZ) * scaleZ;
+      
+      // Tamanho do ponto
+      const radius = index === currentSceneIndex ? 8 : 6;
+      
+      // Cor do ponto (cena atual vs outras cenas)
+      ctx.beginPath();
+      if (index === currentSceneIndex) {
+        // Cena atual - ponto maior e destacado
+        ctx.fillStyle = '#4CAF50';
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+      } else {
+        // Outras cenas
+        ctx.fillStyle = '#2196F3';
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1;
+      }
+      
+      // Desenhar ponto circular
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      
+      // Adicionar texto com nome da cena
+      ctx.fillStyle = '#000';
+      ctx.font = '10px Arial';
+      ctx.fillText(scene.name.substring(0, 10), x + 10, y);
+    });
+    
+    // Adicionar manipulador de cliques para navegação pela planta
+    canvas.style.cursor = 'pointer';
+    canvas.onclick = function(event) {
+      const rect = canvas.getBoundingClientRect();
+      const clickX = event.clientX - rect.left;
+      const clickY = event.clientY - rect.top;
+      
+      // Encontrar o ponto de navegação mais próximo do clique
+      let nearestIndex = -1;
+      let minDistance = Infinity;
+      
+      scenes.forEach((scene, index) => {
+        if (!scene.position) return;
+        
+        const x = margin + (scene.position.x - minX) * scaleX;
+        const y = margin + (scene.position.z - minZ) * scaleZ;
+        
+        const distance = Math.sqrt(Math.pow(clickX - x, 2) + Math.pow(clickY - y, 2));
+        
+        if (distance < 20 && distance < minDistance) {
+          minDistance = distance;
+          nearestIndex = index;
+        }
+      });
+      
+      // Se encontrou um ponto próximo, navega para a cena
+      if (nearestIndex !== -1 && nearestIndex !== currentSceneIndex) {
+        navigateToScene(nearestIndex);
+      }
+    };
+  }
+  
+  // Nova função para criar planta baixa expandida mais realista
   function toggleExpandedFloorPlan(floorPlanUrl) {
     // Remove diálogo existente se houver
     const existingDialog = document.getElementById('expanded-floor-plan');
@@ -1505,7 +1636,7 @@
     // Cria o diálogo modal
     const dialog = document.createElement('div');
     dialog.id = 'expanded-floor-plan';
-    dialog.className = 'expanded-floor-plan';
+    dialog.className = 'expanded-floor-plan matterport-style';
     
     // Adiciona o conteúdo
     dialog.innerHTML = `
@@ -1514,94 +1645,403 @@
         <button class="close-btn">×</button>
       </div>
       <div class="expanded-floor-plan-content">
-        <img src="${floorPlanUrl}" alt="Planta Baixa" />
-        <div class="navigation-points"></div>
+        <div class="loading-spinner"></div>
       </div>
       <div class="expanded-floor-plan-footer">
-        Clique em um ponto na planta para navegar até ele
+        <button class="zoom-in-btn">+</button>
+        <button class="zoom-out-btn">-</button>
+        <button class="reset-view-btn">Reset</button>
       </div>
     `;
     
     document.body.appendChild(dialog);
     
-    // Adiciona evento para fechar
+    // Carregar a imagem em alta resolução
+    const contentDiv = dialog.querySelector('.expanded-floor-plan-content');
+    const img = new Image();
+    
+    img.onload = function() {
+      // Criar canvas para desenhar planta interativa
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      canvas.style.width = '100%';
+      canvas.style.height = 'auto';
+      
+      // Limpar o conteúdo e adicionar o canvas
+      contentDiv.innerHTML = '';
+      contentDiv.appendChild(canvas);
+      
+      // Desenhar a imagem com efeitos de realce
+      const ctx = canvas.getContext('2d');
+      
+      // Fundo claro
+      ctx.fillStyle = '#f5f5f5';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      // Desenhar a planta
+      ctx.drawImage(img, 0, 0, img.width, img.height);
+      
+      // Aplicar efeito para melhoria visual (estilo Matterport)
+      ctx.globalCompositeOperation = 'multiply';
+      ctx.fillStyle = 'rgba(230, 240, 255, 0.3)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.globalCompositeOperation = 'source-over';
+      
+      // Adicionar sombra
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
+      ctx.shadowBlur = 5;
+      ctx.shadowOffsetX = 2;
+      ctx.shadowOffsetY = 2;
+      ctx.strokeStyle = '#555';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(10, 10, canvas.width - 20, canvas.height - 20);
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+      
+      // Adicionar pontos de navegação interativos
+      addDetailedNavigationPointsToFloorPlan(canvas);
+      
+      // Implementar funções de zoom e pan
+      setupFloorPlanInteraction(canvas);
+    };
+    
+    img.onerror = function() {
+      contentDiv.innerHTML = '<p class="error-message">Erro ao carregar a planta baixa.</p>';
+    };
+    
+    img.src = floorPlanUrl;
+    
+    // Configurar eventos dos botões
     dialog.querySelector('.close-btn').addEventListener('click', function() {
       document.body.removeChild(dialog);
     });
     
-    // Adiciona os pontos de navegação na planta
-    const imgContainer = dialog.querySelector('.expanded-floor-plan-content');
-    const img = dialog.querySelector('img');
-    const pointsContainer = dialog.querySelector('.navigation-points');
-    
-    img.onload = function() {
-      // Determina escala da imagem em relação à planta real
-      const imageWidth = this.width;
-      const imageHeight = this.height;
-      
-      // Adiciona pontos de navegação na planta ampliada
-      scenes.forEach((sceneData, index) => {
-        if (!sceneData.center) return;
-        
-        // Detecta limites da geometria da nuvem de pontos
-        const floorLevel = detectFloorLevel();
-        const [minX, maxX, minZ, maxZ] = getPointCloudBounds();
-        
-        // Calcula a posição na imagem
-        const x = ((sceneData.center[0] - minX) / (maxX - minX)) * imageWidth;
-        const y = ((sceneData.center[2] - minZ) / (maxZ - minZ)) * imageHeight;
-        
-        // Cria o ponto de navegação
-        const navPoint = document.createElement('div');
-        navPoint.className = 'floor-plan-nav-point';
-        navPoint.dataset.sceneIndex = index;
-        navPoint.style.left = `${x}px`;
-        navPoint.style.top = `${y}px`;
-        
-        // Destaca o ponto atual
-        if (index === currentSceneIndex) {
-          navPoint.classList.add('current');
+    // Adicionar estilo CSS para o modal da planta baixa se ainda não existir
+    if (!document.getElementById('expanded-floor-plan-css')) {
+      const style = document.createElement('style');
+      style.id = 'expanded-floor-plan-css';
+      style.textContent = `
+        .expanded-floor-plan {
+          position: fixed;
+          top: 50%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          width: 80%;
+          height: 80%;
+          background: white;
+          border-radius: 8px;
+          box-shadow: 0 5px 25px rgba(0,0,0,0.3);
+          display: flex;
+          flex-direction: column;
+          z-index: 1000;
         }
         
-        // Adiciona tooltip com nome da cena
-        navPoint.title = sceneData.name;
+        .expanded-floor-plan-header {
+          padding: 15px;
+          background: #2196F3;
+          color: white;
+          border-radius: 8px 8px 0 0;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        }
         
-        // Adiciona evento para navegar ao clicar
-        navPoint.addEventListener('click', function() {
-          navigateToScene(index);
-          // Fecha o diálogo após navegação
+        .expanded-floor-plan-header h3 {
+          margin: 0;
+          font-weight: normal;
+        }
+        
+        .close-btn {
+          background: none;
+          border: none;
+          color: white;
+          font-size: 24px;
+          cursor: pointer;
+        }
+        
+        .expanded-floor-plan-content {
+          flex: 1;
+          overflow: auto;
+          padding: 20px;
+          position: relative;
+        }
+        
+        .expanded-floor-plan-footer {
+          padding: 10px;
+          border-top: 1px solid #eee;
+          display: flex;
+          justify-content: center;
+          gap: 10px;
+        }
+        
+        .expanded-floor-plan-footer button {
+          padding: 5px 15px;
+          background: #f0f0f0;
+          border: 1px solid #ddd;
+          border-radius: 4px;
+          cursor: pointer;
+        }
+        
+        .expanded-floor-plan-footer button:hover {
+          background: #e0e0e0;
+        }
+        
+        .loading-spinner {
+          width: 40px;
+          height: 40px;
+          border: 4px solid rgba(0,0,0,0.1);
+          border-radius: 50%;
+          border-top: 4px solid #2196F3;
+          animation: spin 1s linear infinite;
+          position: absolute;
+          top: 50%;
+          left: 50%;
+          margin-top: -20px;
+          margin-left: -20px;
+        }
+        
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+      `;
+      document.head.appendChild(style);
+    }
+  }
+  
+  // Função para adicionar pontos de navegação detalhados à planta baixa expandida
+  function addDetailedNavigationPointsToFloorPlan(canvas) {
+    if (!scenes || !currentSceneData || !currentSceneData.position) return;
+    
+    const ctx = canvas.getContext('2d');
+    const width = canvas.width;
+    const height = canvas.height;
+    
+    // Buscar informações sobre a escala da planta baixa
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    
+    scenes.forEach(scene => {
+      if (scene.position) {
+        minX = Math.min(minX, scene.position.x);
+        maxX = Math.max(maxX, scene.position.x);
+        minZ = Math.min(minZ, scene.position.z);
+        maxZ = Math.max(maxZ, scene.position.z);
+      }
+    });
+    
+    // Adicionar margem
+    const margin = 50;
+    const scaleX = (width - margin*2) / (maxX - minX || 1);
+    const scaleZ = (height - margin*2) / (maxZ - minZ || 1);
+    
+    // Desenhar conexões entre pontos primeiro (como no Matterport)
+    ctx.strokeStyle = 'rgba(76, 175, 80, 0.6)';
+    ctx.lineWidth = 2;
+    
+    scenes.forEach((sceneA, indexA) => {
+      if (!sceneA.position) return;
+      
+      const xA = margin + (sceneA.position.x - minX) * scaleX;
+      const yA = margin + (sceneA.position.z - minZ) * scaleZ;
+      
+      scenes.forEach((sceneB, indexB) => {
+        if (indexA >= indexB || !sceneB.position) return;
+        
+        const xB = margin + (sceneB.position.x - minX) * scaleX;
+        const yB = margin + (sceneB.position.z - minZ) * scaleZ;
+        
+        // Calcular distância entre os pontos
+        const distance = Math.sqrt(
+          Math.pow(sceneA.position.x - sceneB.position.x, 2) +
+          Math.pow(sceneA.position.z - sceneB.position.z, 2)
+        );
+        
+        // Só desenha conexões para pontos próximos (< 10 metros)
+        if (distance < 10) {
+          ctx.beginPath();
+          ctx.moveTo(xA, yA);
+          ctx.lineTo(xB, yB);
+          ctx.stroke();
+        }
+      });
+    });
+    
+    // Desenhar pontos de navegação na planta
+    scenes.forEach((scene, index) => {
+      if (!scene.position) return;
+      
+      // Converter coordenadas 3D para coordenadas 2D na planta
+      const x = margin + (scene.position.x - minX) * scaleX;
+      const y = margin + (scene.position.z - minZ) * scaleZ;
+      
+      // Tamanho do ponto
+      const radius = index === currentSceneIndex ? 12 : 8;
+      
+      // Desenhar círculo externo (efeito de halo)
+      ctx.beginPath();
+      ctx.fillStyle = 'rgba(33, 150, 243, 0.2)';
+      ctx.arc(x, y, radius + 5, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Desenhar ponto
+      ctx.beginPath();
+      if (index === currentSceneIndex) {
+        // Cena atual - ponto maior e destacado
+        ctx.fillStyle = '#4CAF50';
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 3;
+      } else {
+        // Outras cenas
+        ctx.fillStyle = '#2196F3';
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+      }
+      
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      
+      // Adicionar número do ponto
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 10px Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(index + 1, x, y);
+      
+      // Adicionar texto com nome da cena abaixo do ponto
+      ctx.fillStyle = '#000';
+      ctx.font = '12px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText(scene.name.substring(0, 15), x, y + radius + 15);
+    });
+    
+    // Adicionar manipulador de cliques para navegação pela planta
+    canvas.style.cursor = 'pointer';
+    canvas.onclick = function(event) {
+      const rect = canvas.getBoundingClientRect();
+      const scaleFactorX = canvas.width / rect.width;
+      const scaleFactorY = canvas.height / rect.height;
+      
+      const clickX = (event.clientX - rect.left) * scaleFactorX;
+      const clickY = (event.clientY - rect.top) * scaleFactorY;
+      
+      // Encontrar o ponto de navegação mais próximo do clique
+      let nearestIndex = -1;
+      let minDistance = Infinity;
+      
+      scenes.forEach((scene, index) => {
+        if (!scene.position) return;
+        
+        const x = margin + (scene.position.x - minX) * scaleX;
+        const y = margin + (scene.position.z - minZ) * scaleZ;
+        
+        const distance = Math.sqrt(Math.pow(clickX - x, 2) + Math.pow(clickY - y, 2));
+        
+        if (distance < 25 && distance < minDistance) {
+          minDistance = distance;
+          nearestIndex = index;
+        }
+      });
+      
+      // Se encontrou um ponto próximo, navega para a cena
+      if (nearestIndex !== -1 && nearestIndex !== currentSceneIndex) {
+        // Efeito de clique
+        const scene = scenes[nearestIndex];
+        if (scene && scene.position) {
+          const x = margin + (scene.position.x - minX) * scaleX;
+          const y = margin + (scene.position.z - minZ) * scaleZ;
+          
+          // Animar efeito de clique
+          ctx.beginPath();
+          ctx.fillStyle = 'rgba(76, 175, 80, 0.5)';
+          ctx.arc(x, y, 20, 0, Math.PI * 2);
+          ctx.fill();
+          
+          // Fechar o diálogo da planta após um breve delay
           setTimeout(() => {
             const dialog = document.getElementById('expanded-floor-plan');
-            if (dialog) document.body.removeChild(dialog);
-          }, 500);
-        });
-        
-        pointsContainer.appendChild(navPoint);
-      });
+            if (dialog) {
+              document.body.removeChild(dialog);
+            }
+            
+            // Navegar para a cena
+            navigateToScene(nearestIndex);
+          }, 300);
+        }
+      }
     };
   }
   
-  // Função auxiliar para obter limites da nuvem de pontos
-  function getPointCloudBounds() {
-    if (!currentPointCloud) return [-10, 10, -10, 10]; // Valores padrão
+  // Função para adicionar interatividade à planta baixa expandida
+  function setupFloorPlanInteraction(canvas) {
+    const contentDiv = canvas.parentElement;
+    let isDragging = false;
+    let lastX, lastY;
+    let scale = 1;
+    let offsetX = 0, offsetY = 0;
     
-    // Obtém a geometria da nuvem de pontos
-    const positions = currentPointCloud.geometry.getAttribute('position');
-    let minX = Infinity, maxX = -Infinity;
-    let minZ = Infinity, maxZ = -Infinity;
-    
-    // Analisa todos os pontos para encontrar os limites
-    for (let i = 0; i < positions.count; i++) {
-      const x = positions.getX(i);
-      const z = positions.getZ(i);
-      
-      minX = Math.min(minX, x);
-      maxX = Math.max(maxX, x);
-      minZ = Math.min(minZ, z);
-      maxZ = Math.max(maxZ, z);
+    // Aplicar transformação
+    function applyTransform() {
+      canvas.style.transform = `scale(${scale}) translate(${offsetX}px, ${offsetY}px)`;
     }
     
-    return [minX, maxX, minZ, maxZ];
+    // Funções para zoom e pan
+    contentDiv.addEventListener('wheel', function(e) {
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? -0.1 : 0.1;
+      scale = Math.max(0.5, Math.min(3, scale + delta));
+      applyTransform();
+    });
+    
+    canvas.addEventListener('mousedown', function(e) {
+      isDragging = true;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      canvas.style.cursor = 'grabbing';
+    });
+    
+    document.addEventListener('mousemove', function(e) {
+      if (!isDragging) return;
+      
+      const dx = (e.clientX - lastX) / scale;
+      const dy = (e.clientY - lastY) / scale;
+      
+      offsetX += dx;
+      offsetY += dy;
+      
+      lastX = e.clientX;
+      lastY = e.clientY;
+      
+      applyTransform();
+    });
+    
+    document.addEventListener('mouseup', function() {
+      isDragging = false;
+      canvas.style.cursor = 'pointer';
+    });
+    
+    // Conectar botões de zoom
+    const dialog = canvas.closest('.expanded-floor-plan');
+    if (dialog) {
+      dialog.querySelector('.zoom-in-btn').addEventListener('click', function() {
+        scale = Math.min(3, scale + 0.2);
+        applyTransform();
+      });
+      
+      dialog.querySelector('.zoom-out-btn').addEventListener('click', function() {
+        scale = Math.max(0.5, scale - 0.2);
+        applyTransform();
+      });
+      
+      dialog.querySelector('.reset-view-btn').addEventListener('click', function() {
+        scale = 1;
+        offsetX = 0;
+        offsetY = 0;
+        applyTransform();
+      });
+    }
   }
   
   // Adiciona pontos de navegação entre cenas
@@ -2055,7 +2495,45 @@
   
   // Manipulador de clique para medição
   function handleMeasurementClick(intersects) {
-    // Precisamos de interseções com a nuvem de pontos
+    if (!isMeasuring) return;
+    
+    // Nova abordagem baseada em panorâmicas
+    if (panoramaSphere) {
+      // Coordenadas do mouse normalizadas (-1 a 1)
+      const mouse = new THREE.Vector2(
+        (event.clientX / window.innerWidth) * 2 - 1,
+        -(event.clientY / window.innerHeight) * 2 + 1
+      );
+      
+      // Configura raycaster para obter direção a partir da câmera
+      raycaster.setFromCamera(mouse, camera);
+      
+      // Direção normalizada do raio
+      const direction = raycaster.ray.direction.clone();
+      
+      // Criar ponto de medição com informações necessárias
+      const measurementPoint = {
+        direction: direction,
+        screenPosition: { x: event.clientX, y: event.clientY }
+      };
+      
+      // Adicionar ponto à lista de pontos de medição
+      measurementPoints.push(measurementPoint);
+      
+      // Criar indicador visual para o ponto de medição
+      createMeasurementMarker(event.clientX, event.clientY, measurementPoints.length);
+      
+      // Se tivermos dois pontos, podemos estimar a distância
+      if (measurementPoints.length === 2) {
+        displayPanoramaMeasurement();
+      } else {
+        showMessage('Clique no segundo ponto para medir a distância');
+      }
+      
+      return;
+    }
+    
+    // Fallback para método antigo baseado na nuvem de pontos
     if (intersects.length === 0) return;
     
     // Pega o ponto de interseção
@@ -2072,98 +2550,319 @@
     }
   }
   
-  // Atualiza a pré-visualização da linha de medição
-  function updateMeasurementPreview(intersects) {
-    if (measurementPoints.length !== 1 || intersects.length === 0) return;
+  // Criar marcador visual para ponto de medição em panorâmica
+  function createMeasurementMarker(x, y, pointNumber) {
+    // Criar elemento HTML para o marcador
+    const marker = document.createElement('div');
+    marker.className = 'measurement-marker';
+    marker.style.position = 'absolute';
+    marker.style.left = `${x}px`;
+    marker.style.top = `${y}px`;
+    marker.style.width = '24px';
+    marker.style.height = '24px';
+    marker.style.marginLeft = '-12px';
+    marker.style.marginTop = '-12px';
+    marker.style.borderRadius = '50%';
+    marker.style.backgroundColor = pointNumber === 1 ? 'rgba(33, 150, 243, 0.7)' : 'rgba(76, 175, 80, 0.7)';
+    marker.style.border = '2px solid white';
+    marker.style.boxShadow = '0 0 5px rgba(0, 0, 0, 0.5)';
+    marker.style.zIndex = '1000';
+    marker.style.display = 'flex';
+    marker.style.justifyContent = 'center';
+    marker.style.alignItems = 'center';
+    marker.style.color = 'white';
+    marker.style.fontWeight = 'bold';
+    marker.style.fontSize = '14px';
+    marker.textContent = pointNumber.toString();
     
-    const startPoint = measurementPoints[0];
-    const endPoint = intersects[0].point;
+    document.body.appendChild(marker);
     
-    // Se já temos uma linha de pré-visualização, atualizamos
-    if (measurementPreview) {
-      const positions = measurementPreview.geometry.attributes.position.array;
-      positions[3] = endPoint.x;
-      positions[4] = endPoint.y;
-      positions[5] = endPoint.z;
-      measurementPreview.geometry.attributes.position.needsUpdate = true;
-      
-      // Exibe distância em tempo real
-      const distance = startPoint.distanceTo(endPoint);
-      measureInfoElement.textContent = `Distância: ${distance.toFixed(2)} m`;
-    } else {
-      // Cria a linha de pré-visualização
-      const geometry = new THREE.BufferGeometry();
-      const positions = new Float32Array([
-        startPoint.x, startPoint.y, startPoint.z,
-        endPoint.x, endPoint.y, endPoint.z
-      ]);
-      
-      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      
-      const material = new THREE.LineBasicMaterial({
-        color: 0xff0000,
-        linewidth: 2,
-        dashSize: 1,
-        gapSize: 0.5
-      });
-      
-      measurementPreview = new THREE.Line(geometry, material);
-      scene.add(measurementPreview);
-      
-      // Exibe o elemento de informação de medição
-      measureInfoElement.style.display = 'block';
+    // Guardar referência ao marcador
+    if (measurementPoints.length > 0) {
+      const lastPoint = measurementPoints[measurementPoints.length - 1];
+      lastPoint.marker = marker;
     }
   }
   
-  // Exibe a medição final
-  function displayMeasurement() {
-    // Remove a pré-visualização
-    if (measurementPreview) {
-      scene.remove(measurementPreview);
-      measurementPreview = null;
-    }
+  // Exibir controles para estimativa de distância em medição panorâmica
+  function displayPanoramaMeasurement() {
+    if (measurementPoints.length !== 2) return;
     
-    // Remove a linha anterior se existir
+    const point1 = measurementPoints[0];
+    const point2 = measurementPoints[1];
+    
+    // Calcular ângulo entre as direções
+    const angle = point1.direction.angleTo(point2.direction);
+    
+    // Exibir painel de controle para estimativa de distância
+    const controlPanel = document.createElement('div');
+    controlPanel.className = 'distance-control-panel';
+    controlPanel.style.position = 'absolute';
+    controlPanel.style.bottom = '100px';
+    controlPanel.style.left = '50%';
+    controlPanel.style.transform = 'translateX(-50%)';
+    controlPanel.style.padding = '15px';
+    controlPanel.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+    controlPanel.style.borderRadius = '8px';
+    controlPanel.style.color = 'white';
+    controlPanel.style.zIndex = '1000';
+    controlPanel.style.boxShadow = '0 0 10px rgba(0, 0, 0, 0.3)';
+    
+    // Estimativa inicial de distância (assumindo que os pontos estão a 3m da câmera)
+    const estimatedDistance = 3;
+    
+    // Calcular distância real entre os pontos 3D usando a estimativa
+    const worldPos1 = camera.position.clone().add(
+      point1.direction.clone().multiplyScalar(estimatedDistance)
+    );
+    
+    const worldPos2 = camera.position.clone().add(
+      point2.direction.clone().multiplyScalar(estimatedDistance)
+    );
+    
+    const initialDistance = worldPos1.distanceTo(worldPos2);
+    
+    controlPanel.innerHTML = `
+      <h3 style="margin-top: 0; font-size: 16px;">Estimativa de Distância</h3>
+      <p>Aproximadamente quanto os pontos estão distantes de você?</p>
+      
+      <div style="display: flex; align-items: center; margin: 15px 0;">
+        <button id="distance-decrease" style="width: 30px; height: 30px; background: #333; color: white; border: none; border-radius: 4px;">-</button>
+        <input type="range" id="distance-slider" min="0.5" max="15" step="0.5" value="3" style="flex: 1; margin: 0 10px;">
+        <button id="distance-increase" style="width: 30px; height: 30px; background: #333; color: white; border: none; border-radius: 4px;">+</button>
+      </div>
+      
+      <div style="margin-bottom: 10px; display: flex; justify-content: space-between;">
+        <span>Distância da câmera: <span id="camera-distance">3.0</span>m</span>
+        <span>Distância entre pontos: <span id="points-distance">${initialDistance.toFixed(2)}</span>m</span>
+      </div>
+      
+      <div style="display: flex; justify-content: space-between; margin-top: 15px;">
+        <button id="cancel-measurement" style="padding: 8px 15px; background: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;">Cancelar</button>
+        <button id="confirm-measurement" style="padding: 8px 15px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;">Confirmar</button>
+      </div>
+    `;
+    
+    document.body.appendChild(controlPanel);
+    
+    // Criar preview da linha de medição
+    createMeasurementLine(estimatedDistance);
+    
+    // Adicionar eventos aos controles
+    const slider = document.getElementById('distance-slider');
+    const cameraDistanceSpan = document.getElementById('camera-distance');
+    const pointsDistanceSpan = document.getElementById('points-distance');
+    
+    slider.addEventListener('input', function() {
+      const distance = parseFloat(this.value);
+      cameraDistanceSpan.textContent = distance.toFixed(1);
+      
+      // Atualizar linha de medição
+      updateMeasurementLine(distance);
+      
+      // Calcular e mostrar distância entre pontos
+      const pos1 = camera.position.clone().add(
+        point1.direction.clone().multiplyScalar(distance)
+      );
+      
+      const pos2 = camera.position.clone().add(
+        point2.direction.clone().multiplyScalar(distance)
+      );
+      
+      const pointsDistance = pos1.distanceTo(pos2);
+      pointsDistanceSpan.textContent = pointsDistance.toFixed(2);
+    });
+    
+    document.getElementById('distance-decrease').addEventListener('click', function() {
+      const currentValue = parseFloat(slider.value);
+      if (currentValue > parseFloat(slider.min)) {
+        slider.value = (currentValue - 0.5).toString();
+        slider.dispatchEvent(new Event('input'));
+      }
+    });
+    
+    document.getElementById('distance-increase').addEventListener('click', function() {
+      const currentValue = parseFloat(slider.value);
+      if (currentValue < parseFloat(slider.max)) {
+        slider.value = (currentValue + 0.5).toString();
+        slider.dispatchEvent(new Event('input'));
+      }
+    });
+    
+    document.getElementById('cancel-measurement').addEventListener('click', function() {
+      clearMeasurement();
+      document.body.removeChild(controlPanel);
+    });
+    
+    document.getElementById('confirm-measurement').addEventListener('click', function() {
+      const distance = parseFloat(slider.value);
+      const pointsDistance = parseFloat(pointsDistanceSpan.textContent);
+      
+      // Finalizar medição com a distância confirmada
+      finalizeMeasurement(distance, pointsDistance);
+      
+      // Remover painel de controle
+      document.body.removeChild(controlPanel);
+    });
+  }
+  
+  // Criar linha de medição baseada em panorâmica
+  function createMeasurementLine(distance) {
+    // Remover linha existente se houver
     if (measurementLine) {
       scene.remove(measurementLine);
+      measurementLine = null;
     }
     
-    // Cria a linha de medição final
+    if (measurementPoints.length !== 2) return;
+    
+    const point1 = measurementPoints[0];
+    const point2 = measurementPoints[1];
+    
+    // Calcular posições 3D com base nas direções e distância
+    const pos1 = camera.position.clone().add(
+      point1.direction.clone().multiplyScalar(distance)
+    );
+    
+    const pos2 = camera.position.clone().add(
+      point2.direction.clone().multiplyScalar(distance)
+    );
+    
+    // Criar geometria da linha
     const geometry = new THREE.BufferGeometry();
     const positions = new Float32Array([
-      measurementPoints[0].x, measurementPoints[0].y, measurementPoints[0].z,
-      measurementPoints[1].x, measurementPoints[1].y, measurementPoints[1].z
+      pos1.x, pos1.y, pos1.z,
+      pos2.x, pos2.y, pos2.z
     ]);
     
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     
+    // Material da linha (estilo Matterport)
     const material = new THREE.LineBasicMaterial({
-      color: 0x00ff00,
-      linewidth: 3
+      color: 0x4CAF50,
+      linewidth: 2
     });
     
+    // Criar linha
     measurementLine = new THREE.Line(geometry, material);
     scene.add(measurementLine);
     
-    // Calcula e exibe a distância
-    const distance = measurementPoints[0].distanceTo(measurementPoints[1]);
-    measureInfoElement.textContent = `Distância: ${distance.toFixed(2)} m`;
-    
-    // Adiciona esferas nos pontos de medição
-    addMeasurementPoints();
-    
-    // Limpa os pontos para próxima medição
-    measurementPoints = [];
+    return { pos1, pos2 };
   }
   
-  // Adiciona esferas nos pontos de medição
-  function addMeasurementPoints() {
-    measurementPoints.forEach(point => {
-      const geometry = new THREE.SphereGeometry(0.05, 16, 16);
-      const material = new THREE.MeshBasicMaterial({ color: 0xffff00 });
-      const sphere = new THREE.Mesh(geometry, material);
-      sphere.position.copy(point);
-      scene.add(sphere);
+  // Atualizar linha de medição com nova distância
+  function updateMeasurementLine(distance) {
+    const { pos1, pos2 } = createMeasurementLine(distance);
+    
+    // Atualizar exibição de distância
+    if (measureInfoElement) {
+      const pointsDistance = pos1.distanceTo(pos2);
+      measureInfoElement.textContent = `Distância: ${pointsDistance.toFixed(2)} m`;
+      measureInfoElement.style.display = 'block';
+    }
+  }
+  
+  // Finalizar medição e salvar resultado
+  function finalizeMeasurement(cameraDistance, pointsDistance) {
+    if (measurementPoints.length !== 2) return;
+    
+    const point1 = measurementPoints[0];
+    const point2 = measurementPoints[1];
+    
+    // Calcular posições 3D finais
+    const pos1 = camera.position.clone().add(
+      point1.direction.clone().multiplyScalar(cameraDistance)
+    );
+    
+    const pos2 = camera.position.clone().add(
+      point2.direction.clone().multiplyScalar(cameraDistance)
+    );
+    
+    // Criar esferas para marcar os pontos no mundo 3D
+    const sphereGeometry = new THREE.SphereGeometry(0.05, 16, 16);
+    const sphereMaterial = new THREE.MeshBasicMaterial({ color: 0xFFFF00 });
+    
+    const sphere1 = new THREE.Mesh(sphereGeometry, sphereMaterial);
+    sphere1.position.copy(pos1);
+    scene.add(sphere1);
+    
+    const sphere2 = new THREE.Mesh(sphereGeometry, sphereMaterial);
+    sphere2.position.copy(pos2);
+    scene.add(sphere2);
+    
+    // Calcular ponto médio para o rótulo
+    const midPoint = new THREE.Vector3().addVectors(pos1, pos2).multiplyScalar(0.5);
+    
+    // Criar rótulo permanente com a distância
+    const label = document.createElement('div');
+    label.className = 'measurement-label';
+    label.style.position = 'absolute';
+    label.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+    label.style.color = 'white';
+    label.style.padding = '5px 10px';
+    label.style.borderRadius = '4px';
+    label.style.fontSize = '14px';
+    label.style.fontWeight = 'bold';
+    label.style.pointerEvents = 'none';
+    label.style.zIndex = '900';
+    label.textContent = `${pointsDistance.toFixed(2)} m`;
+    document.body.appendChild(label);
+    
+    // Guardar medição para atualização quando a câmera mover
+    const measurement = {
+      points: [pos1.clone(), pos2.clone()],
+      label: label,
+      line: measurementLine,
+      spheres: [sphere1, sphere2]
+    };
+    
+    // Adicionar à lista de medições
+    if (!window.measurements) window.measurements = [];
+    window.measurements.push(measurement);
+    
+    // Atualizar posição inicial do rótulo
+    updateMeasurementLabelPosition(measurement);
+    
+    // Limpar estado de medição temporária
+    measurementLine = null;  // Removemos a referência, mas mantemos o objeto na cena
+    measurementPoints = [];
+    
+    // Remover marcadores temporários
+    document.querySelectorAll('.measurement-marker').forEach(marker => {
+      document.body.removeChild(marker);
+    });
+    
+    showMessage(`Medição adicionada: ${pointsDistance.toFixed(2)} m`);
+  }
+  
+  // Atualizar posição do rótulo de uma medição
+  function updateMeasurementLabelPosition(measurement) {
+    // Calcular ponto médio
+    const midPoint = new THREE.Vector3().addVectors(
+      measurement.points[0],
+      measurement.points[1]
+    ).multiplyScalar(0.5);
+    
+    // Converter para coordenadas de tela
+    const screenPos = worldToScreen(midPoint);
+    
+    if (screenPos) {
+      // Ponto está visível na tela
+      measurement.label.style.display = 'block';
+      measurement.label.style.left = `${screenPos.x}px`;
+      measurement.label.style.top = `${screenPos.y}px`;
+    } else {
+      // Ponto está fora da tela
+      measurement.label.style.display = 'none';
+    }
+  }
+  
+  // Atualizar todas as etiquetas de medição
+  function updateAllMeasurementLabels() {
+    if (!window.measurements) return;
+    
+    window.measurements.forEach(measurement => {
+      updateMeasurementLabelPosition(measurement);
     });
   }
   
@@ -2393,14 +3092,25 @@
         target: controls.target.clone()
       };
       
+      // Detectar andares na cena
+      const floors = detectFloorsInScene();
+      
+      // Criar menu de seleção de andares se tiver mais de um andar
+      if (floors.length > 1) {
+        createFloorSelector(floors);
+      }
+      
+      // Aplicar estilo dollhouse aos objetos (cores por andar)
+      applyDollhouseStyle(floors);
+      
       // Anima câmera para uma posição elevada com visão de cima
       const sceneCenter = currentSceneData ? currentSceneData.center : [0, 0, 0];
       
       // Posição para a vista de dollhouse (acima e inclinada)
       const dollhousePos = new THREE.Vector3(
-        sceneCenter[0] - 5,
+        sceneCenter[0] - 8,
         Math.max(15, floorLevel + 15),
-        sceneCenter[2] - 5
+        sceneCenter[2] - 8
       );
       
       // Alvo da câmera (centro da cena)
@@ -2427,13 +3137,19 @@
       
       showMessage('Modo Dollhouse ativado');
     } else {
-      // Modo normal - restaura a visualização anterior
+      // Modo normal - volta para panorâmica
       if (panoramaSphere) {
         panoramaSphere.visible = true;
       }
       
+      // Remove elementos da interface do dollhouse
+      removeDollhouseUI();
+      
+      // Remove efeitos visuais do dollhouse
+      removeDollhouseStyle();
+      
+      // Retorna câmera à posição anterior
       if (savedCameraPosition) {
-        // Anima a volta para a posição anterior
         animateCameraMovement(
           camera.position.clone(),
           savedCameraPosition.position,
@@ -2441,21 +3157,18 @@
           savedCameraPosition.target,
           1500
         );
-      } else {
-        // Se não temos posição salva, volta para a posição padrão
-        resetView();
+        
+        // Restaura limites dos controles
+        controls.minPolarAngle = Math.PI * 0.05;
+        controls.maxPolarAngle = Math.PI * 0.95;
+        controls.minDistance = 0.1;
+        controls.maxDistance = 5;
       }
-      
-      // Ajusta controles para modo panorâmico
-      controls.minPolarAngle = Math.PI * 0.05;
-      controls.maxPolarAngle = Math.PI * 0.95;
-      controls.minDistance = 0.1;
-      controls.maxDistance = 1.0;
       
       showMessage('Modo normal restaurado');
     }
     
-    // Atualiza UI
+    // Atualiza o estado da UI
     updateUIState();
   }
   
@@ -2464,7 +3177,7 @@
     if (autoTourActive) {
       // Para o tour
       stopAutoTour();
-    } else {
+      } else {
       // Inicia o tour
       startAutoTour();
     }
@@ -2627,14 +3340,19 @@
       document.body.appendChild(container);
     }
     
-    // Verificar se temos dados de cena
-    if (!sceneData || !sceneData.scenes || sceneData.scenes.length === 0) {
+    // CORREÇÃO: Verificar se temos a variável global scenes em vez de sceneData
+    if (!scenes || scenes.length === 0) {
       console.warn('Sem dados de cena para criar pontos de navegação');
       return;
     }
     
     // Obter a cena atual
-    const currentScene = sceneData.scenes[currentSceneIndex];
+    if (currentSceneIndex < 0 || currentSceneIndex >= scenes.length) {
+      console.warn('Índice de cena atual inválido');
+      return;
+    }
+    
+    const currentScene = scenes[currentSceneIndex];
     if (!currentScene || !currentScene.position) {
       console.warn('Cena atual inválida ou sem posição');
       return;
@@ -2649,265 +3367,249 @@
     // Armazenar candidatos a pontos de navegação com suas distâncias
     const candidates = [];
     
-    // Processar todas as cenas para criar pontos de navegação
-    sceneData.scenes.forEach((scene, index) => {
+    // Iterar por todas as cenas e adicionar como candidatos
+    scenes.forEach((scene, index) => {
       // Pular a cena atual
       if (index === currentSceneIndex) return;
       
       // Verificar se a cena tem posição
       if (!scene.position) {
-        console.warn(`Cena ${index} não tem posição definida`);
+        console.warn(`Cena ${index} (${scene.name}) não tem posição`);
         return;
       }
       
-      // Criar vetor para a posição da cena
       const scenePosition = new THREE.Vector3(
         scene.position.x,
         scene.position.y,
         scene.position.z
       );
       
-      // Calcular distância até a cena atual
+      // Calcular distância entre as cenas
       const distance = currentPosition.distanceTo(scenePosition);
       
-      // Adicionar à lista de candidatos
-      candidates.push({
-        index,
-        position: scenePosition,
-        distance,
-        name: scene.name || `Cena ${index}`
-      });
+      // MELHORIA: Reduzir a distância mínima para 0.8m em vez de 1.5m
+      // e aumentar a distância máxima para 40m em vez de 25m
+      if (distance >= 0.8 && distance <= 40) {
+        candidates.push({
+          index,
+          scene,
+          position: scenePosition,
+          distance
+        });
+      }
     });
     
-    // Ordenar candidatos por distância
+    // Ordenar candidatos pela distância
     candidates.sort((a, b) => a.distance - b.distance);
     
-    // Filtrar pontos para evitar aglomeração
-    // Reduzir a distância mínima para 0.8 metros (era 1.5m)
-    // e garantir que pelo menos os 3 pontos mais próximos sejam mantidos
-    const minDistance = 0.8;
-    const filteredCandidates = [];
-    const guaranteedClosest = 3;
-    
-    // Sempre manter os N pontos mais próximos
-    for (let i = 0; i < Math.min(guaranteedClosest, candidates.length); i++) {
-      filteredCandidates.push(candidates[i]);
-    }
-    
-    // Filtrar os demais pontos
-    for (let i = guaranteedClosest; i < candidates.length; i++) {
-      const candidate = candidates[i];
-      
-      // Verificar se está muito próximo de algum ponto já filtrado
-      const isTooClose = filteredCandidates.some(filtered => 
-        filtered.position.distanceTo(candidate.position) < minDistance
-      );
-      
-      if (!isTooClose) {
-        filteredCandidates.push(candidate);
-      }
-    }
-    
-    // Limitar o número máximo de pontos visíveis (aumentado de 8 para 15)
-    // e a distância máxima de navegação (aumentada de 25 para 40 metros)
+    // MELHORIA: Garantir que pelo menos os 3 pontos mais próximos sempre apareçam
+    // e aumentar o número máximo de pontos de 8 para 15
+    const minPoints = 3;
     const maxPoints = 15;
-    const maxDistance = 40;
+    const navPoints = candidates.slice(0, Math.max(minPoints, Math.min(candidates.length, maxPoints)));
     
-    // Criar pontos de navegação para os candidatos filtrados
-    let createdPoints = 0;
-    
-    filteredCandidates.forEach(candidate => {
-      // Limitar número de pontos e distância
-      if (createdPoints >= maxPoints || candidate.distance > maxDistance) return;
-      
-      // Ajustar altura para o nível do piso
+    // Adicionar pontos de navegação ao container
+    navPoints.forEach(point => {
+      // Ajustar a altura do ponto para ficar no nível do piso
       const adjustedPosition = new THREE.Vector3(
-        candidate.position.x,
-        floorLevel + 1.2, // Posicionar um pouco acima do piso para melhor visibilidade
-        candidate.position.z
+        point.position.x,
+        // MELHORIA: Melhorar o posicionamento vertical dos pontos
+        // para ficarem ligeiramente acima do nível do piso (15cm)
+        floorLevel + 0.15,
+        point.position.z
       );
       
-      // Criar ponto HTML
-      const htmlPoint = createHtmlNavPoint(
+      // Criar ponto de navegação HTML com o novo estilo
+      createHtmlNavPoint(
         adjustedPosition,
-        candidate.index,
-        candidate.distance,
-        candidate.name
+        point.scene.name,
+        point.index,
+        point.distance
       );
-      
-      if (htmlPoint) {
-        createdPoints++;
-        
-        // Também criar representação 3D do ponto
-        const geometry = new THREE.SphereGeometry(0.1, 16, 16);
-        const material = new THREE.MeshBasicMaterial({ 
-          color: 0x00aaff,
-          transparent: true,
-          opacity: 0.7
-        });
-        
-        const sphere = new THREE.Mesh(geometry, material);
-        sphere.position.copy(adjustedPosition);
-        sphere.userData = { 
-          isNavigationPoint: true,
-          targetSceneIndex: candidate.index
-        };
-        
-        scene.add(sphere);
-      }
     });
     
-    console.log(`Criados ${createdPoints} pontos de navegação`);
+    // Atualizar as posições iniciais
+    updateNavPointsPositions();
   }
 
-  // Função para criar ponto de navegação HTML estilo Matterport
+  // Função melhorada para criar pontos de navegação HTML
   function createHtmlNavPoint(position3D, name, sceneIndex, distance) {
-    // Converte posição 3D para coordenadas de tela
-    const vector = position3D.clone();
-    vector.project(camera);
+    // Criar container principal
+    const pointContainer = document.createElement('div');
+    pointContainer.className = 'mp-nav-point';
+    pointContainer.setAttribute('data-scene-index', sceneIndex);
+    pointContainer.style.position = 'absolute';
+    pointContainer.style.transformOrigin = 'center center';
+    pointContainer.style.pointerEvents = 'auto';
+    pointContainer.style.cursor = 'pointer';
     
-    // Coordenadas de tela
-    const x = (vector.x * 0.5 + 0.5) * window.innerWidth;
-    const y = (vector.y * -0.5 + 0.5) * window.innerHeight;
+    // Criar círculo exterior (contêiner principal)
+    const outerCircle = document.createElement('div');
+    outerCircle.className = 'mp-nav-point-outer';
+    outerCircle.style.width = '32px';
+    outerCircle.style.height = '32px';
+    outerCircle.style.borderRadius = '50%';
+    outerCircle.style.backgroundColor = 'rgba(255, 255, 255, 0.2)';
+    outerCircle.style.border = '2px solid rgba(255, 255, 255, 0.8)';
+    outerCircle.style.boxShadow = '0 0 10px rgba(0, 0, 0, 0.5)';
+    outerCircle.style.display = 'flex';
+    outerCircle.style.justifyContent = 'center';
+    outerCircle.style.alignItems = 'center';
+    outerCircle.style.position = 'relative';
+    outerCircle.style.animation = 'pulse 2s infinite';
     
-    // Verificar se o ponto está na frente da câmera e dentro da tela
-    if (vector.z > 1 || x < 0 || x > window.innerWidth || y < 0 || y > window.innerHeight) {
-      // Ponto está atrás da câmera ou fora da tela, não exibir
-      return;
-    }
+    // Criar o círculo interno
+    const innerCircle = document.createElement('div');
+    innerCircle.className = 'mp-nav-point-inner';
+    innerCircle.style.width = '16px';
+    innerCircle.style.height = '16px';
+    innerCircle.style.borderRadius = '50%';
+    innerCircle.style.backgroundColor = 'white';
+    innerCircle.style.boxShadow = '0 0 5px rgba(255, 255, 255, 0.8)';
     
-    // Criar elemento HTML para o ponto de navegação
-    const navPoint = document.createElement('div');
-    navPoint.className = 'mp-nav-point';
+    // Adicionar direção (seta)
+    const directionArrow = document.createElement('div');
+    directionArrow.className = 'mp-nav-point-arrow';
+    directionArrow.style.position = 'absolute';
+    directionArrow.style.top = '-20px';
+    directionArrow.style.left = '50%';
+    directionArrow.style.transform = 'translateX(-50%)';
+    directionArrow.style.width = '0';
+    directionArrow.style.height = '0';
+    directionArrow.style.borderLeft = '8px solid transparent';
+    directionArrow.style.borderRight = '8px solid transparent';
+    directionArrow.style.borderBottom = '12px solid white';
+    directionArrow.style.opacity = '0';
+    directionArrow.style.transition = 'opacity 0.3s ease';
     
-    // MELHORADO: Cores mais brilhantes e maior tamanho para melhor visibilidade
-    // Adicionando a estrutura Matterport-like com círculo externo e interno
-    // e indicação direcional para mostrar para onde o ponto leva
-    navPoint.innerHTML = `
-      <div class="mp-nav-point-outer"></div>
-      <div class="mp-nav-point-inner"></div>
-      <div class="mp-nav-point-direction"></div>
-    `;
+    // Tooltip com nome da cena e distância
+    const tooltip = document.createElement('div');
+    tooltip.className = 'mp-nav-point-tooltip';
+    tooltip.style.position = 'absolute';
+    tooltip.style.bottom = '40px';
+    tooltip.style.left = '50%';
+    tooltip.style.transform = 'translateX(-50%)';
+    tooltip.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
+    tooltip.style.color = 'white';
+    tooltip.style.padding = '5px 10px';
+    tooltip.style.borderRadius = '4px';
+    tooltip.style.whiteSpace = 'nowrap';
+    tooltip.style.fontSize = '12px';
+    tooltip.style.fontWeight = 'bold';
+    tooltip.style.opacity = '0';
+    tooltip.style.transition = 'opacity 0.3s ease';
+    tooltip.style.pointerEvents = 'none';
+    tooltip.style.zIndex = '200';
+    tooltip.textContent = `${name} (${distance.toFixed(1)}m)`;
     
-    navPoint.setAttribute('data-scene-index', sceneIndex);
-    navPoint.setAttribute('data-name', name);
-    navPoint.setAttribute('data-distance', distance.toFixed(1));
+    // Adicionar os elementos ao DOM
+    outerCircle.appendChild(innerCircle);
+    pointContainer.appendChild(outerCircle);
+    pointContainer.appendChild(directionArrow);
+    pointContainer.appendChild(tooltip);
     
-    // Posicionar o elemento na tela
-    navPoint.style.left = `${x}px`;
-    navPoint.style.top = `${y}px`;
-    
-    // MELHORADO: Tamanho aumentado para melhor visibilidade
-    const baseSize = 40; // Era 30px
-    navPoint.style.width = `${baseSize}px`;
-    navPoint.style.height = `${baseSize}px`;
-    
-    // Escala menor para pontos mais distantes
-    const scale = Math.max(0.8, 1 - (distance * 0.01));
-    navPoint.style.transform = `translate(-50%, -50%) scale(${scale})`;
-    
-    // MELHORADO: Adicionando rótulo com nome da cena para melhorar a navegação
-    const label = document.createElement('div');
-    label.className = 'mp-nav-point-label';
-    label.textContent = `${name.replace(/^__Scan_/, '')} (${distance.toFixed(1)}m)`;
-    navPoint.appendChild(label);
-    
-    // Adicionar tooltip com informações
-    navPoint.title = `${name} (${distance.toFixed(1)}m)`;
-    
-    // Adicionar evento de clique
-    navPoint.style.pointerEvents = 'auto';
-    navPoint.addEventListener('click', () => {
-      console.log(`Clique no ponto de navegação para cena ${name} (índice ${sceneIndex})`);
-      navigateToScene(sceneIndex);
-    });
-    
-    // Efeito de hover para destacar o ponto
-    navPoint.addEventListener('mouseenter', () => {
-      navPoint.classList.add('mp-nav-point-hover');
-      
-      // MELHORADO: Destacar mais o ponto que está sob o mouse
-      const outerCircle = navPoint.querySelector('.mp-nav-point-outer');
-      const innerCircle = navPoint.querySelector('.mp-nav-point-inner');
-      const directionIndicator = navPoint.querySelector('.mp-nav-point-direction');
-      
-      if (outerCircle) outerCircle.style.transform = 'scale(1.2)';
-      if (innerCircle) innerCircle.style.transform = 'scale(1.3)';
-      if (directionIndicator) directionIndicator.style.opacity = '1';
-    });
-    
-    navPoint.addEventListener('mouseleave', () => {
-      navPoint.classList.remove('mp-nav-point-hover');
-      
-      // Restaurar tamanho original
-      const outerCircle = navPoint.querySelector('.mp-nav-point-outer');
-      const innerCircle = navPoint.querySelector('.mp-nav-point-inner');
-      const directionIndicator = navPoint.querySelector('.mp-nav-point-direction');
-      
-      if (outerCircle) outerCircle.style.transform = '';
-      if (innerCircle) innerCircle.style.transform = '';
-      if (directionIndicator) directionIndicator.style.opacity = '0.6';
-    });
-    
-    // Adicionar ao container
+    // Adicionar ao container de pontos de navegação
     const container = document.getElementById('nav-points-container');
-    if (container) {
-      container.appendChild(navPoint);
-    } else {
-      document.body.appendChild(navPoint);
+    container.appendChild(pointContainer);
+    
+    // Adicionar eventos para interatividade
+    pointContainer.addEventListener('mouseenter', () => {
+      outerCircle.style.transform = 'scale(1.2)';
+      tooltip.style.opacity = '1';
+      directionArrow.style.opacity = '1';
+    });
+    
+    pointContainer.addEventListener('mouseleave', () => {
+      outerCircle.style.transform = 'scale(1)';
+      tooltip.style.opacity = '0';
+      directionArrow.style.opacity = '0';
+    });
+    
+    pointContainer.addEventListener('click', handleNavPointClick);
+    
+    // Efeito de clique
+    pointContainer.addEventListener('mousedown', () => {
+      outerCircle.style.transform = 'scale(0.9)';
+    });
+    
+    pointContainer.addEventListener('mouseup', () => {
+      outerCircle.style.transform = 'scale(1.2)';
+    });
+    
+    // Atualizar rotação do ponto para apontar na direção correta
+    updateNavPointDirection(pointContainer, position3D);
+    
+    // Adicionar CSS global para animação de pulso se ainda não existir
+    if (!document.getElementById('nav-points-css')) {
+      const style = document.createElement('style');
+      style.id = 'nav-points-css';
+      style.textContent = `
+        @keyframes pulse {
+          0% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.7); }
+          70% { box-shadow: 0 0 0 10px rgba(255, 255, 255, 0); }
+          100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); }
+        }
+      `;
+      document.head.appendChild(style);
     }
     
-    return navPoint;
+    return pointContainer;
   }
 
-  // Função para atualizar os pontos de navegação HTML quando a câmera se move
+  // Nova função para atualizar a direção dos pontos de navegação
+  function updateNavPointDirection(pointElement, targetPosition) {
+    if (!camera || !targetPosition) return;
+    
+    // Obter a posição da câmera e direção para o alvo
+    const cameraPosition = camera.position.clone();
+    const direction = new THREE.Vector3().subVectors(targetPosition, cameraPosition).normalize();
+    
+    // Calcular o ângulo no plano XZ (horizontal)
+    const angle = Math.atan2(direction.x, direction.z) * (180 / Math.PI);
+    
+    // Aplicar rotação ao elemento da seta
+    const arrow = pointElement.querySelector('.mp-nav-point-arrow');
+    if (arrow) {
+      arrow.style.transform = `translateX(-50%) rotate(${angle}deg)`;
+    }
+  }
+
+  // Função melhorada para atualizar posições dos pontos de navegação
   function updateNavPointsPositions() {
     const navPoints = document.querySelectorAll('.mp-nav-point');
-    if (navPoints.length === 0) return;
-    
-    // Reutilizamos o valor do piso em cache para evitar cálculos repetidos que causam spam no console
-    const floorLevel = detectFloorLevel();
     
     navPoints.forEach(point => {
       const sceneIndex = parseInt(point.getAttribute('data-scene-index'));
+      if (isNaN(sceneIndex) || sceneIndex < 0 || sceneIndex >= scenes.length) return;
+      
       const sceneData = scenes[sceneIndex];
+      if (!sceneData || !sceneData.position) return;
       
-      if (!sceneData || !sceneData.center) return;
-      
-      // Usa o mesmo cálculo de altura baseado na distância que usamos na criação
-      const distance = parseFloat(point.getAttribute('data-distance') || "0");
-      const navPointHeight = floorLevel + 0.15 + (distance * 0.01);
-      
-      const position3D = new THREE.Vector3(
-        sceneData.center[0],
-        navPointHeight,
-        sceneData.center[2]
+      const position = new THREE.Vector3(
+        sceneData.position.x,
+        sceneData.position.y,
+        sceneData.position.z
       );
       
-      // Converte posição 3D para coordenadas de tela
-      const vector = position3D.clone();
-      vector.project(camera);
+      // Usar a função melhorada worldToScreen
+      const screenPos = worldToScreen(position);
       
-      // Coordenadas de tela
-      const x = (vector.x * 0.5 + 0.5) * window.innerWidth;
-      const y = (vector.y * -0.5 + 0.5) * window.innerHeight;
-      
-      // Oculta pontos que estão atrás da câmera ou fora da tela
-      if (vector.z > 1 || x < 0 || x > window.innerWidth || y < 0 || y > window.innerHeight) {
-        point.style.display = 'none';
-      } else {
-        point.style.display = 'flex';
-        point.style.left = `${x}px`;
-        point.style.top = `${y}px`;
+      if (screenPos) {
+        // Ponto está visível na tela
+        point.style.display = 'block';
+        point.style.left = `${screenPos.x}px`;
+        point.style.top = `${screenPos.y}px`;
         
-        // Ajusta o tamanho do ponto baseado na distância para criar efeito de perspectiva
-        // Pontos mais distantes ficam menores
-        const scale = Math.max(0.6, 1 - (distance * 0.02));
+        // MELHORIA: Adicionar efeito de escala baseado na profundidade
+        // Pontos mais distantes aparecem menores, pontos mais próximos aparecem maiores
+        const scale = Math.max(0.7, 1 - (screenPos.depth * 0.3));
         point.style.transform = `translate(-50%, -50%) scale(${scale})`;
         
-        // Ajusta a opacidade baseada na distância
-        const opacity = Math.max(0.4, 1 - (distance * 0.03));
-        point.querySelector('.mp-nav-point-outer').style.opacity = opacity;
+        // Atualizar a direção do ponto
+        updateNavPointDirection(point, position);
+      } else {
+        // Ponto não está visível na tela
+        point.style.display = 'none';
       }
     });
   }
@@ -3362,7 +4064,7 @@
       // Continua a animação se não terminou
       if (progress < 1) {
         requestAnimationFrame(animateReset);
-      } else {
+    } else {
         console.log('Visualização resetada para posição padrão');
       }
     }
@@ -3448,45 +4150,40 @@
 
   // Função para lidar com cliques nos pontos de navegação
   function handleNavPointClick(event) {
-    // Converte coordenadas do mouse para coordenadas normalizadas (-1 a 1)
-    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+    event.preventDefault();
+    event.stopPropagation();
     
-    // Configura o raycaster
-    raycaster.setFromCamera(mouse, camera);
-    
-    // Encontra objetos que intersectam com o raio
-    const intersects = raycaster.intersectObjects(scene.children, true);
-    
-    // Verifica se clicou em algum ponto de navegação
-    for (let i = 0; i < intersects.length; i++) {
-      const object = intersects[i].object;
-      
-      // Verifica se é um ponto de navegação
-      if (object.userData && object.userData.type === 'navpoint') {
-        const targetScene = object.userData.targetScene;
-        console.log(`Clique em ponto de navegação para cena ${targetScene}`);
-        
-        // Navega para a cena correspondente
-        navigateToScene(targetScene);
-        return true;
-      }
+    // Obter o elemento pai que contém o atributo data-scene-index
+    let target = event.target;
+    while (target && !target.hasAttribute('data-scene-index')) {
+      target = target.parentElement;
     }
     
-    // Verifica se clicou em algum ponto de navegação HTML
-    const elements = document.elementsFromPoint(event.clientX, event.clientY);
-    for (const element of elements) {
-      if (element.classList.contains('mp-nav-point')) {
-        const sceneIndex = parseInt(element.getAttribute('data-scene-index'));
-        if (!isNaN(sceneIndex)) {
-          console.log(`Clique em ponto de navegação HTML para cena ${sceneIndex}`);
-          navigateToScene(sceneIndex);
-          return true;
-        }
-      }
+    if (!target) {
+      console.warn('Clique em elemento sem índice de cena');
+      return;
     }
     
-    return false;
+    // Obter o índice da cena alvo
+    const sceneIndex = parseInt(target.getAttribute('data-scene-index'));
+    if (isNaN(sceneIndex)) {
+      console.warn('Índice de cena inválido');
+      return;
+    }
+    
+    console.log(`Clique em ponto de navegação para cena ${sceneIndex}`);
+    
+    // Adicionar efeito visual de clique
+    const outerCircle = target.querySelector('.mp-nav-point-outer');
+    if (outerCircle) {
+      outerCircle.style.transform = 'scale(0.8)';
+      setTimeout(() => {
+        outerCircle.style.transform = 'scale(1)';
+      }, 200);
+    }
+    
+    // Navegar para a cena correspondente
+    navigateToScene(sceneIndex);
   }
 
   // Função para alternar entre modo unificado e cena única
@@ -4122,11 +4819,640 @@
     const x = (vector.x * widthHalf) + widthHalf;
     const y = -(vector.y * heightHalf) + heightHalf;
     
-    // Verificar se o ponto está dentro da tela
+    // Verificar se o ponto está dentro da tela e na frente da câmera
+    // Agora com uma verificação mais robusta para a visibilidade
     if (x < 0 || x > window.innerWidth || y < 0 || y > window.innerHeight || vector.z > 1) {
       return null; // Ponto fora da tela ou atrás da câmera
     }
     
-    return { x, y };
+    // Calculamos também a "profundidade" normalizada do ponto para efeitos visuais
+    // valores próximos de 0 estão mais perto, valores próximos de 1 estão mais longe
+    const depth = (vector.z + 1) / 2;
+    
+    return { x, y, depth };
+  }
+
+  // Atualiza a pré-visualização da linha de medição
+  function updateMeasurementPreview(intersects) {
+    // Se não temos o primeiro ponto, não fazemos nada
+    if (measurementPoints.length !== 1) return;
+    
+    // Se estamos usando panorâmicas
+    if (panoramaSphere && measurementPoints[0].direction) {
+      // Obter posição do mouse
+      const mouse = new THREE.Vector2(
+        (event.clientX / window.innerWidth) * 2 - 1,
+        -(event.clientY / window.innerHeight) * 2 + 1
+      );
+      
+      // Calcular direção do raio
+      raycaster.setFromCamera(mouse, camera);
+      const direction = raycaster.ray.direction.clone();
+      
+      // Distância estimada padrão para pré-visualização
+      const estimatedDistance = 5; // 5 metros
+      
+      // Calcular pontos 3D
+      const pos1 = camera.position.clone().add(
+        measurementPoints[0].direction.clone().multiplyScalar(estimatedDistance)
+      );
+      
+      const pos2 = camera.position.clone().add(
+        direction.clone().multiplyScalar(estimatedDistance)
+      );
+      
+      // Criar ou atualizar linha de pré-visualização
+      if (measurementPreview) {
+        const positions = measurementPreview.geometry.attributes.position.array;
+        positions[0] = pos1.x;
+        positions[1] = pos1.y;
+        positions[2] = pos1.z;
+        positions[3] = pos2.x;
+        positions[4] = pos2.y;
+        positions[5] = pos2.z;
+        measurementPreview.geometry.attributes.position.needsUpdate = true;
+      } else {
+        // Criar linha de pré-visualização
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array([
+          pos1.x, pos1.y, pos1.z,
+          pos2.x, pos2.y, pos2.z
+        ]);
+        
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        
+        const material = new THREE.LineDashedMaterial({
+          color: 0xff0000,
+          dashSize: 0.2,
+          gapSize: 0.1,
+          linewidth: 2
+        });
+        
+        measurementPreview = new THREE.Line(geometry, material);
+        measurementPreview.computeLineDistances(); // Necessário para linhas tracejadas
+        scene.add(measurementPreview);
+      }
+      
+      // Atualizar distância exibida
+      if (measureInfoElement) {
+        const distance = pos1.distanceTo(pos2);
+        measureInfoElement.textContent = `Distância aproximada: ${distance.toFixed(2)} m`;
+        measureInfoElement.style.display = 'block';
+      }
+      
+      return;
+    }
+    
+    // Fallback para nuvem de pontos
+    if (!intersects || intersects.length === 0) return;
+    
+    const startPoint = measurementPoints[0];
+    const endPoint = intersects[0].point;
+    
+    // Se já temos uma linha de pré-visualização, atualizamos
+    if (measurementPreview) {
+      const positions = measurementPreview.geometry.attributes.position.array;
+      positions[3] = endPoint.x;
+      positions[4] = endPoint.y;
+      positions[5] = endPoint.z;
+      measurementPreview.geometry.attributes.position.needsUpdate = true;
+      
+      // Exibe distância em tempo real
+      const distance = startPoint.distanceTo(endPoint);
+      measureInfoElement.textContent = `Distância: ${distance.toFixed(2)} m`;
+    } else {
+      // Cria a linha de pré-visualização
+      const geometry = new THREE.BufferGeometry();
+      const positions = new Float32Array([
+        startPoint.x, startPoint.y, startPoint.z,
+        endPoint.x, endPoint.y, endPoint.z
+      ]);
+      
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      
+      const material = new THREE.LineBasicMaterial({
+        color: 0xff0000,
+        linewidth: 2
+      });
+      
+      measurementPreview = new THREE.Line(geometry, material);
+      scene.add(measurementPreview);
+      
+      // Exibe o elemento de informação de medição
+      if (measureInfoElement) {
+        measureInfoElement.style.display = 'block';
+      }
+    }
+  }
+
+  // Limpar medição completa
+  function clearMeasurement() {
+    // Limpar pontos temporários
+    clearMeasurementPoints();
+    
+    // Remover linha de medição
+    if (measurementLine) {
+      scene.remove(measurementLine);
+      measurementLine = null;
+    }
+    
+    // Remover linha de preview
+    if (measurementPreview) {
+      scene.remove(measurementPreview);
+      measurementPreview = null;
+    }
+    
+    // Esconder info de medição
+    if (measureInfoElement) {
+      measureInfoElement.style.display = 'none';
+    }
+  }
+
+  // Função para detectar andares na cena
+  function detectFloorsInScene() {
+    const floors = [];
+    const floorHeights = new Set();
+    
+    // Altura do piso detectada
+    const baseFloorLevel = detectFloorLevel();
+    floorHeights.add(baseFloorLevel);
+    
+    // Buscar alturas de andares a partir das posições das cenas
+    scenes.forEach(scene => {
+      if (scene.position) {
+        const y = scene.position.y;
+        
+        // Consideramos que diferenças maiores que 2 metros indicam andares diferentes
+        if (Math.abs(y - baseFloorLevel) > 2) {
+          floorHeights.add(Math.round(y * 2) / 2); // Arredonda para o 0.5m mais próximo
+        }
+      }
+    });
+    
+    // Converte para array e ordena
+    const sortedHeights = Array.from(floorHeights).sort((a, b) => a - b);
+    
+    // Atribui nomes aos andares (Térreo, 1º Andar, etc.)
+    sortedHeights.forEach((height, index) => {
+      let name;
+      if (index === 0) {
+        name = "Térreo";
+      } else {
+        name = `${index}º Andar`;
+      }
+      
+      floors.push({
+        index,
+        height,
+        name
+      });
+    });
+    
+    return floors;
+  }
+
+  // Cria seletor de andares para modo dollhouse
+  function createFloorSelector(floors) {
+    // Remove seletor anterior se existir
+    removeDollhouseUI();
+    
+    // Criar container para o seletor de andares
+    const selectorContainer = document.createElement('div');
+    selectorContainer.id = 'floor-selector';
+    selectorContainer.className = 'floor-selector';
+    selectorContainer.style.position = 'absolute';
+    selectorContainer.style.top = '50%';
+    selectorContainer.style.right = '20px';
+    selectorContainer.style.transform = 'translateY(-50%)';
+    selectorContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+    selectorContainer.style.borderRadius = '8px';
+    selectorContainer.style.padding = '10px';
+    selectorContainer.style.zIndex = '100';
+    selectorContainer.style.display = 'flex';
+    selectorContainer.style.flexDirection = 'column';
+    selectorContainer.style.alignItems = 'center';
+    selectorContainer.style.gap = '10px';
+    
+    // Título
+    const title = document.createElement('div');
+    title.textContent = 'Andares';
+    title.style.color = 'white';
+    title.style.fontWeight = 'bold';
+    title.style.marginBottom = '5px';
+    selectorContainer.appendChild(title);
+    
+    // Botões para cada andar (ordem inversa para ter térreo embaixo)
+    [...floors].reverse().forEach(floor => {
+      const button = document.createElement('button');
+      button.className = 'floor-button';
+      button.textContent = floor.name;
+      button.dataset.floorHeight = floor.height;
+      button.style.padding = '8px 15px';
+      button.style.backgroundColor = '#2196F3';
+      button.style.color = 'white';
+      button.style.border = 'none';
+      button.style.borderRadius = '4px';
+      button.style.cursor = 'pointer';
+      button.style.width = '100%';
+      
+      // Evento para focar neste andar
+      button.addEventListener('click', () => {
+        focusOnFloor(floor.height);
+        
+        // Destacar botão selecionado
+        document.querySelectorAll('.floor-button').forEach(btn => {
+          btn.style.backgroundColor = '#2196F3';
+        });
+        button.style.backgroundColor = '#4CAF50';
+      });
+      
+      selectorContainer.appendChild(button);
+    });
+    
+    // Botão para vista explosionada (todos os andares)
+    const explodedViewBtn = document.createElement('button');
+    explodedViewBtn.textContent = 'Vista Explodida';
+    explodedViewBtn.style.padding = '8px 15px';
+    explodedViewBtn.style.backgroundColor = '#FF9800';
+    explodedViewBtn.style.color = 'white';
+    explodedViewBtn.style.border = 'none';
+    explodedViewBtn.style.borderRadius = '4px';
+    explodedViewBtn.style.cursor = 'pointer';
+    explodedViewBtn.style.width = '100%';
+    explodedViewBtn.style.marginTop = '10px';
+    
+    explodedViewBtn.addEventListener('click', createExplodedView);
+    selectorContainer.appendChild(explodedViewBtn);
+    
+    document.body.appendChild(selectorContainer);
+  }
+  
+  // Focar em um andar específico
+  function focusOnFloor(floorHeight) {
+    // Encontrar altura do teto (aproximadamente 3m acima do piso)
+    const ceilingHeight = floorHeight + 3;
+    
+    // Esconder objetos que não pertencem a este andar
+    scene.traverse(obj => {
+      // Só processamos objetos visíveis com posição
+      if (!obj.visible || !obj.position) return;
+      
+      // Verificamos se o objeto está no andar selecionado
+      const objY = obj.position.y;
+      
+      // Se for uma nuvem de pontos, usamos uma abordagem especial
+      if (obj.isPoints) {
+        // Verificamos se a nuvem tem atributo de posição
+        if (obj.geometry && obj.geometry.getAttribute('position')) {
+          const positions = obj.geometry.getAttribute('position');
+          const count = positions.count;
+          
+          // Criamos um novo atributo de cores para colorir por andar
+          if (!obj.geometry.getAttribute('color')) {
+            const colors = new Float32Array(count * 3);
+            obj.geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+          }
+          
+          const colors = obj.geometry.getAttribute('color');
+          
+          // Colorimos pontos por andar
+          for (let i = 0; i < count; i++) {
+            const y = positions.getY(i);
+            
+            // Define cor com base na altura (andar atual vs outros andares)
+            if (y >= floorHeight - 0.5 && y <= ceilingHeight) {
+              // Pontos do andar atual - cor normal
+              colors.setXYZ(i, 1, 1, 1);
+            } else {
+              // Pontos de outros andares - semitransparentes
+              colors.setXYZ(i, 0.3, 0.3, 0.3);
+            }
+          }
+          
+          colors.needsUpdate = true;
+          obj.material.vertexColors = true;
+          obj.material.opacity = 1.0;
+          obj.material.transparent = true;
+        }
+      } else if (obj.isMesh) {
+        // Para objetos normais, simplesmente ajustamos a visibilidade
+        if (objY >= floorHeight - 0.5 && objY <= ceilingHeight) {
+          obj.visible = true;
+          
+          // Destacar objetos do andar selecionado
+          if (obj.material) {
+            obj.material.opacity = 1.0;
+            if (obj.userData.originalColor) {
+              obj.material.color.set(obj.userData.originalColor);
+            }
+          }
+        } else {
+          // Tornar objetos de outros andares semitransparentes
+          if (obj.material) {
+            if (!obj.userData.originalColor) {
+              obj.userData.originalColor = obj.material.color.clone();
+            }
+            obj.material.opacity = 0.3;
+            obj.material.transparent = true;
+            obj.material.color.set(0x999999);
+          }
+        }
+      }
+    });
+    
+    // Mover câmera para visualizar o andar selecionado
+    const sceneCenter = currentSceneData ? currentSceneData.center : [0, 0, 0];
+    
+    // Posição para visualizar o andar (ligeiramente acima e afastada)
+    const cameraPos = new THREE.Vector3(
+      sceneCenter[0] - 8,
+      floorHeight + 5,
+      sceneCenter[2] - 8
+    );
+    
+    // Alvo no centro do andar
+    const cameraTarget = new THREE.Vector3(
+      sceneCenter[0],
+      floorHeight + 1,
+      sceneCenter[2]
+    );
+    
+    // Animar câmera para a nova posição
+    animateCameraMovement(
+      camera.position.clone(),
+      cameraPos,
+      controls.target.clone(),
+      cameraTarget,
+      1000
+    );
+    
+    showMessage(`Visualizando: ${floorHeight >= 0 ? floorHeight.toFixed(1) + 'm' : 'Subsolo'}`);
+  }
+  
+  // Criar vista explodida de todos os andares
+  function createExplodedView() {
+    // Obter todos os andares
+    const floors = detectFloorsInScene();
+    
+    // Fator de separação entre andares
+    const floorSeparation = 5; // metros
+    
+    // Mapear alturas originais para alturas explodidas
+    const heightMap = {};
+    floors.forEach((floor, index) => {
+      heightMap[floor.height] = floor.height + (index * floorSeparation);
+    });
+    
+    // Ajustar posição dos objetos com base no mapa de alturas
+    scene.traverse(obj => {
+      // Só modificamos objetos visíveis com posição
+      if (!obj.visible || !obj.position) return;
+      
+      // Para nuvens de pontos, podemos precisar deslocar pontos
+      if (obj.isPoints && obj.geometry && obj.geometry.getAttribute('position')) {
+        const positions = obj.geometry.getAttribute('position');
+        const count = positions.count;
+        
+        // Se não tivermos uma cópia das posições originais, criamos uma
+        if (!obj.userData.originalPositions) {
+          const originalPositions = new Float32Array(count * 3);
+          for (let i = 0; i < count; i++) {
+            originalPositions[i*3] = positions.getX(i);
+            originalPositions[i*3+1] = positions.getY(i);
+            originalPositions[i*3+2] = positions.getZ(i);
+          }
+          obj.userData.originalPositions = originalPositions;
+        }
+        
+        // Obtemos as posições originais
+        const originalPositions = obj.userData.originalPositions;
+        
+        // Atualizamos as posições com base no mapa de alturas
+        for (let i = 0; i < count; i++) {
+          const originalY = originalPositions[i*3+1];
+          
+          // Encontrar o andar mais próximo para este ponto
+          let closestFloor = floors[0].height;
+          let minDistance = Math.abs(originalY - closestFloor);
+          
+          floors.forEach(floor => {
+            const distance = Math.abs(originalY - floor.height);
+            if (distance < minDistance) {
+              minDistance = distance;
+              closestFloor = floor.height;
+            }
+          });
+          
+          // Aplicar a nova altura do andar
+          if (heightMap[closestFloor] !== undefined) {
+            const newY = originalY + (heightMap[closestFloor] - closestFloor);
+            positions.setY(i, newY);
+          }
+        }
+        
+        positions.needsUpdate = true;
+      } else if (obj.isMesh) {
+        // Para meshes, guardamos a posição original se ainda não tivermos
+        if (!obj.userData.originalPosition) {
+          obj.userData.originalPosition = obj.position.clone();
+        }
+        
+        const originalY = obj.userData.originalPosition.y;
+        
+        // Encontrar o andar mais próximo
+        let closestFloor = floors[0].height;
+        let minDistance = Math.abs(originalY - closestFloor);
+        
+        floors.forEach(floor => {
+          const distance = Math.abs(originalY - floor.height);
+          if (distance < minDistance) {
+            minDistance = distance;
+            closestFloor = floor.height;
+          }
+        });
+        
+        // Aplicar a nova altura
+        if (heightMap[closestFloor] !== undefined) {
+          const deltaY = heightMap[closestFloor] - closestFloor;
+          obj.position.y = originalY + deltaY;
+        }
+        
+        // Tornar todos os objetos visíveis
+        obj.visible = true;
+        
+        // Restaurar cores originais
+        if (obj.material) {
+          if (obj.userData.originalColor) {
+            obj.material.color.copy(obj.userData.originalColor);
+          }
+          obj.material.opacity = 1.0;
+        }
+      }
+    });
+    
+    // Ajustar câmera para ver toda a vista explodida
+    const sceneCenter = currentSceneData ? currentSceneData.center : [0, 0, 0];
+    const highestFloor = Math.max(...Object.values(heightMap));
+    
+    // Posição para ver todos os andares
+    const cameraPos = new THREE.Vector3(
+      sceneCenter[0] - 15,
+      highestFloor + 10,
+      sceneCenter[2] - 15
+    );
+    
+    // Alvo no meio da vista explodida
+    const cameraTarget = new THREE.Vector3(
+      sceneCenter[0],
+      (floors[0].height + highestFloor) / 2,
+      sceneCenter[2]
+    );
+    
+    // Animar câmera
+    animateCameraMovement(
+      camera.position.clone(),
+      cameraPos,
+      controls.target.clone(),
+      cameraTarget,
+      1500
+    );
+    
+    showMessage('Vista explodida criada');
+  }
+  
+  // Aplicar estilo visual para o modo dollhouse
+  function applyDollhouseStyle(floors) {
+    // Cores por andar (paleta harmoniosa)
+    const floorColors = [
+      0x4CAF50, // Verde
+      0x2196F3, // Azul
+      0xFF9800, // Laranja
+      0x9C27B0, // Roxo
+      0xF44336, // Vermelho
+      0x00BCD4, // Ciano
+      0xFFEB3B  // Amarelo
+    ];
+    
+    // Mapeamento de alturas para cores
+    const colorMap = {};
+    floors.forEach((floor, index) => {
+      colorMap[floor.height] = floorColors[index % floorColors.length];
+    });
+    
+    // Aplicar estilo aos objetos
+    scene.traverse(obj => {
+      if (!obj.visible) return;
+      
+      // Colorir nuvens de pontos por andar
+      if (obj.isPoints && obj.geometry && obj.geometry.getAttribute('position')) {
+        const positions = obj.geometry.getAttribute('position');
+        const count = positions.count;
+        
+        // Criar atributo de cor se não existir
+        if (!obj.geometry.getAttribute('color')) {
+          const colors = new Float32Array(count * 3);
+          obj.geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        }
+        
+        const colors = obj.geometry.getAttribute('color');
+        
+        // Colorir pontos por andar
+        for (let i = 0; i < count; i++) {
+          const y = positions.getY(i);
+          
+          // Encontrar o andar mais próximo
+          let closestFloor = floors[0].height;
+          let minDistance = Math.abs(y - closestFloor);
+          
+          floors.forEach(floor => {
+            const distance = Math.abs(y - floor.height);
+            if (distance < minDistance) {
+              minDistance = distance;
+              closestFloor = floor.height;
+            }
+          });
+          
+          // Obter cor para este andar
+          const color = new THREE.Color(colorMap[closestFloor] || 0xcccccc);
+          
+          // Definir cor do ponto
+          colors.setXYZ(i, color.r, color.g, color.b);
+        }
+        
+        colors.needsUpdate = true;
+        obj.material.vertexColors = true;
+      } else if (obj.isMesh && obj.material) {
+        // Guardar cor original
+        if (!obj.userData.originalColor) {
+          obj.userData.originalColor = obj.material.color.clone();
+        }
+        
+        // Colorir por andar para meshes também
+        const y = obj.position.y;
+        
+        // Encontrar andar mais próximo
+        let closestFloor = floors[0].height;
+        let minDistance = Math.abs(y - closestFloor);
+        
+        floors.forEach(floor => {
+          const distance = Math.abs(y - floor.height);
+          if (distance < minDistance) {
+            minDistance = distance;
+            closestFloor = floor.height;
+          }
+        });
+        
+        // Aplicar cor do andar
+        if (colorMap[closestFloor]) {
+          const color = new THREE.Color(colorMap[closestFloor]);
+          obj.material.color.copy(color);
+        }
+      }
+    });
+  }
+  
+  // Remover os elementos da UI do dollhouse
+  function removeDollhouseUI() {
+    // Remover seletor de andares
+    const floorSelector = document.getElementById('floor-selector');
+    if (floorSelector) {
+      document.body.removeChild(floorSelector);
+    }
+  }
+  
+  // Remover efeitos visuais do dollhouse
+  function removeDollhouseStyle() {
+    scene.traverse(obj => {
+      // Restaurar cores originais
+      if (obj.isMesh && obj.material && obj.userData.originalColor) {
+        obj.material.color.copy(obj.userData.originalColor);
+        obj.material.opacity = 1.0;
+        obj.material.transparent = false;
+      }
+      
+      // Restaurar posições originais
+      if (obj.userData.originalPosition) {
+        obj.position.copy(obj.userData.originalPosition);
+      }
+      
+      // Restaurar posições originais em nuvens de pontos
+      if (obj.isPoints && obj.geometry && obj.userData.originalPositions) {
+        const positions = obj.geometry.getAttribute('position');
+        const count = positions.count;
+        const originalPositions = obj.userData.originalPositions;
+        
+        // Restaurar posições
+        for (let i = 0; i < count; i++) {
+          positions.setXYZ(
+            i,
+            originalPositions[i*3],
+            originalPositions[i*3+1],
+            originalPositions[i*3+2]
+          );
+        }
+        
+        positions.needsUpdate = true;
+      }
+    });
   }
 })();
